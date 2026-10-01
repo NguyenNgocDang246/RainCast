@@ -1,4 +1,4 @@
-import type { Forecast } from "./api";
+import { API_BASE, type Forecast } from "./api";
 
 // Types mirror the Go admin API (internal/server/admin.go, internal/store).
 
@@ -123,7 +123,7 @@ export type BacktestReport = {
 };
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(path, { cache: "no-store", ...init });
+  const res = await fetch(API_BASE + path, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error ?? `HTTP ${res.status}`);

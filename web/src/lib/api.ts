@@ -21,8 +21,14 @@ export type Forecast = {
 
 export type Place = { name: string; address: string; lat: number; lon: number };
 
+/**
+ * Prefix for every /api request. Empty means same origin: in production Caddy
+ * routes /api to the Go backend, in dev Next rewrites it (next.config.ts).
+ */
+export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(path, { cache: "no-store", signal });
+  const res = await fetch(API_BASE + path, { cache: "no-store", signal });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     // Kept in the backend's words; components translate with errorText.

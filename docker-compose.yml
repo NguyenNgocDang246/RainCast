@@ -1,0 +1,35 @@
+# Deploy everything on one server:
+#   cp .env.example .env   # fill in LOCATIONIQ_KEY, SITE_ADDRESS, ADMIN_*
+#   docker compose up -d --build
+# Only Caddy is reachable from outside (ports 80/443).
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - raincast-data:/app/data
+
+  web:
+    build: ./web
+    restart: unless-stopped
+    depends_on: [api]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on: [api, web]
+
+volumes:
+  raincast-data:
+  caddy-data:
+  caddy-config:

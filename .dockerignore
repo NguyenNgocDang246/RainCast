@@ -1,0 +1,7 @@
+.git
+bin
+data
+web
+*.log
+.env
+.playwright-mcp

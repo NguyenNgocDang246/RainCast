@@ -1,0 +1,19 @@
+# Single entry point: /api/* goes to the Go backend, everything else to Next.
+# SITE_ADDRESS ":80" serves plain HTTP on the server's IP; a host name such as
+# "203.0.113.7.sslip.io" makes Caddy fetch an HTTPS certificate automatically.
+{$SITE_ADDRESS::80} {
+	encode zstd gzip
+
+	# The admin API has no authentication of its own (internal/server/admin.go).
+	@admin path /admin /admin/* /api/admin/*
+	basic_auth @admin {
+		{$ADMIN_USER} {$ADMIN_HASH}
+	}
+
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}
