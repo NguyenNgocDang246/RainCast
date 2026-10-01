@@ -100,7 +100,12 @@ export type Lookup = {
 };
 
 export type BacktestResult = {
+  /** Vietnamese label; build one from pairs/trend/baseline instead. */
   name: string;
+  /** Missing in reports saved before these fields existed. */
+  pairs?: number;
+  trend?: boolean;
+  baseline?: boolean;
   leads: { lead_min: number; scores: Scores; mae_dbz: number | null }[];
   overall: Scores;
 };

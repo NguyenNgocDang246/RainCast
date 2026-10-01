@@ -6,12 +6,15 @@ import { geocode } from "@/lib/api";
 import { adminGet, adminImage } from "@/lib/admin";
 import { dbz, minutes, time } from "@/lib/adminFormat";
 import { compass } from "@/lib/format";
-import { Panel, td, th } from "./ui";
+import { useLocale } from "@/lib/i18n";
+import { ErrorText, Panel, td, th } from "./ui";
 
 type Target = { lat: number; lon: number } | null; // null = home location
 
 /** Inspect any location: radar mosaic with motion, and the full forecast. */
 export function ToolsTab({ initial }: { initial: Target }) {
+  const { t } = useLocale();
+  const tt = t.admin.tools;
   const [target, setTarget] = useState<Target>(initial);
   const [input, setInput] = useState(initial ? `${initial.lat}, ${initial.lon}` : "");
   const [places, setPlaces] = useState<Place[] | null>(null);
@@ -56,7 +59,7 @@ export function ToolsTab({ initial }: { initial: Target }) {
       const found = await geocode(input.trim());
       if (found.length === 1) setTarget({ lat: found[0].lat, lon: found[0].lon });
       setPlaces(found);
-      if (!found.length) setError("Không tìm thấy địa điểm.");
+      if (!found.length) setError(tt.notFound);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -66,12 +69,12 @@ export function ToolsTab({ initial }: { initial: Target }) {
 
   return (
     <div className="space-y-6">
-      <Panel title="Xem một vị trí">
+      <Panel title={tt.inspect}>
         <form onSubmit={search} className="flex gap-2">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="Địa chỉ, link Google Maps, tọa độ — để trống = điểm theo dõi"
+            placeholder={tt.placeholder}
             className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
           />
           <button
@@ -79,7 +82,7 @@ export function ToolsTab({ initial }: { initial: Target }) {
             disabled={busy}
             className="cursor-pointer rounded-xl bg-sky-500 px-4 text-sm font-medium text-slate-950 hover:bg-sky-400 disabled:opacity-50"
           >
-            {busy ? "Đang tìm…" : "Xem"}
+            {busy ? tt.busy : tt.view}
           </button>
         </form>
         {places && places.length > 1 && (
@@ -101,24 +104,24 @@ export function ToolsTab({ initial }: { initial: Target }) {
             ))}
           </ul>
         )}
-        {error && <p className="mt-3 text-sm text-amber-300">Lỗi: {error}</p>}
+        {error && <ErrorText error={error} className="mt-3" />}
       </Panel>
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <Panel title="Ảnh radar và chuyển động">
+        <Panel title={tt.radarTitle}>
           {img ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={img} alt="Radar quanh vị trí" className="aspect-square w-full rounded-xl border border-slate-800" />
+            <img src={img} alt={tt.radarAlt} className="aspect-square w-full rounded-xl border border-slate-800" />
           ) : (
             <div className="aspect-square animate-pulse rounded-xl bg-slate-900" />
           )}
           <p className="mt-2 text-xs text-slate-500">
-            Chấm đỏ: vị trí · vòng 25/50/100 km · mũi tên: quãng đường mưa đi trong 60 phút · lưới: ranh giới tile z7
+            {tt.legend}
           </p>
         </Panel>
 
-        <Panel title="Dự báo chi tiết">
-          {forecast ? <ForecastDetail f={forecast} /> : <p className="animate-pulse text-sm text-slate-500">Đang tải…</p>}
+        <Panel title={tt.detail}>
+          {forecast ? <ForecastDetail f={forecast} /> : <p className="animate-pulse text-sm text-slate-500">{t.admin.ui.loading}</p>}
         </Panel>
       </div>
     </div>
@@ -126,26 +129,33 @@ export function ToolsTab({ initial }: { initial: Target }) {
 }
 
 function ForecastDetail({ f }: { f: Forecast }) {
+  const { locale, t } = useLocale();
+  const tt = t.admin.tools;
+  const st = t.admin.state;
   return (
     <div className="space-y-4 text-sm">
       <dl className="grid grid-cols-2 gap-x-4 gap-y-2">
-        <Row k="Vị trí" v={`${f.location.lat}, ${f.location.lon}`} />
-        <Row k="Khung radar" v={time(f.frame_time)} />
-        <Row k="Hiện tại" v={f.heavy_now ? "mưa to" : f.raining_now ? "đang mưa" : "khô"} />
-        <Row k="Mưa tới sau" v={f.raining_now ? "đang mưa" : minutes(f.arrival_min)} />
-        <Row k="Mưa to sau" v={f.heavy_now ? "đang mưa to" : minutes(f.heavy_arrival_min)} />
+        <Row k={tt.place} v={`${f.location.lat}, ${f.location.lon}`} />
+        <Row k={tt.frame} v={time(f.frame_time, locale)} />
+        <Row k={tt.now} v={f.heavy_now ? st.heavy : f.raining_now ? st.raining : st.dry} />
+        <Row k={tt.rainIn} v={f.raining_now ? st.raining : minutes(f.arrival_min, locale)} />
+        <Row k={tt.heavyIn} v={f.heavy_now ? st.heavyNow : minutes(f.heavy_arrival_min, locale)} />
         <Row
-          k="Chuyển động"
-          v={f.motion_reliable ? `${f.speed_kmh.toFixed(1)} km/h về ${compass(f.direction_deg)} (${f.direction_deg.toFixed(0)}°)` : "không đủ dữ liệu"}
+          k={tt.motion}
+          v={
+            f.motion_reliable
+              ? tt.motionValue(f.speed_kmh.toFixed(1), compass(f.direction_deg, locale), f.direction_deg.toFixed(0))
+              : tt.noMotion
+          }
         />
-        <Row k="Ngưỡng" v={`mưa ≥ ${f.threshold_dbz} dBZ · mưa to ≥ ${f.heavy_dbz} dBZ`} />
+        <Row k={tt.threshold} v={tt.thresholdValue(f.threshold_dbz, f.heavy_dbz)} />
       </dl>
       <div className="max-h-72 overflow-y-auto">
         <table className="w-full">
           <thead className="sticky top-0 bg-slate-900">
             <tr className="border-b border-slate-800">
-              <th className={th}>Phút (từ khung)</th>
-              <th className={th}>dBZ dự báo</th>
+              <th className={th}>{tt.minuteFromFrame}</th>
+              <th className={th}>{tt.predictedDbz}</th>
             </tr>
           </thead>
           <tbody>

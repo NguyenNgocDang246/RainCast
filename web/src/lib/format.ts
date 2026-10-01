@@ -1,10 +1,9 @@
 import type { Forecast } from "./api";
-
-const COMPASS = ["Bắc", "Đông Bắc", "Đông", "Đông Nam", "Nam", "Tây Nam", "Tây", "Tây Bắc"];
+import { bcp47, messages, type Locale } from "./i18n";
 
 /** 8-point compass name for a bearing in degrees. */
-export function compass(deg: number): string {
-  return COMPASS[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
+export function compass(deg: number, locale: Locale): string {
+  return messages[locale].compass[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
 }
 
 /** First minute after the frame at which the echo drops below dbz, or -1. */
@@ -13,8 +12,8 @@ export function dropsBelow(f: Forecast, dbz: number): number {
   return p ? p.minute : -1;
 }
 
-export function clock(ms: number): string {
-  return new Date(ms).toLocaleTimeString("vi-VN", { hour: "2-digit", minute: "2-digit" });
+export function clock(ms: number, locale: Locale): string {
+  return new Date(ms).toLocaleTimeString(bcp47(locale), { hour: "2-digit", minute: "2-digit" });
 }
 
 /** Strongest predicted echo from minute `from` (inclusive) to the end. */

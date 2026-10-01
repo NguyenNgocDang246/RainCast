@@ -4,6 +4,11 @@
   --font-sans: var(--font-sans-vi);
 }
 
+/* Matches the color-scheme meta in layout.tsx. */
+:root {
+  color-scheme: light;
+}
+
 body {
   background: #020617;
   color: #e2e8f0;

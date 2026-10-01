@@ -46,11 +46,15 @@ type LeadScore struct {
 	MAEdBZ  *float64      `json:"mae_dbz"` // over samples where either side had rain
 }
 
-// Result is one variant's (or the persistence baseline's) score.
+// Result is one variant's (or the persistence baseline's) score. Pairs,
+// Trend and Baseline let clients build their own label instead of Name.
 type Result struct {
-	Name    string        `json:"name"`
-	Leads   []LeadScore   `json:"leads"`
-	Overall verify.Scores `json:"overall"`
+	Name     string        `json:"name"`
+	Pairs    int           `json:"pairs"`
+	Trend    bool          `json:"trend"`
+	Baseline bool          `json:"baseline"`
+	Leads    []LeadScore   `json:"leads"`
+	Overall  verify.Scores `json:"overall"`
 }
 
 // Report is the outcome of a run.
@@ -192,9 +196,13 @@ func Run(frames []Frame, cfg Config) Report {
 		}
 	}
 
-	rep.Results = append(rep.Results, base.result("Giữ nguyên (baseline)", cfg.Leads))
+	baseline := base.result("Giữ nguyên (baseline)", cfg.Leads)
+	baseline.Baseline = true
+	rep.Results = append(rep.Results, baseline)
 	for i, v := range cfg.Variants {
-		rep.Results = append(rep.Results, accs[i].result(v.Name, cfg.Leads))
+		r := accs[i].result(v.Name, cfg.Leads)
+		r.Pairs, r.Trend = v.Pairs, v.Trend
+		rep.Results = append(rep.Results, r)
 	}
 	return rep
 }
