@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+@theme inline {
+  --font-sans: var(--font-sans-vi);
+}
+
+body {
+  background: #020617;
+  color: #e2e8f0;
+  font-family: var(--font-sans-vi), system-ui, sans-serif;
+}
