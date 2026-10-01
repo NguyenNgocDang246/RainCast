@@ -3,29 +3,28 @@
 import { useState } from "react";
 import type { Accuracy, Scores } from "@/lib/admin";
 import { pct } from "@/lib/adminFormat";
+import { useLocale } from "@/lib/i18n";
 import { BacktestPanel } from "./BacktestPanel";
 import { Loading, Panel, Stat, td, th, useAdminData } from "./ui";
 
 // Categorical slots 1-3 (dark), validated against the slate-900 surface.
+// Labels come from t.admin.accuracy.series / .metrics.
 export const SERIES = {
-  model: { label: "Mô hình", color: "#3987e5" },
-  persistence: { label: "Giữ nguyên (baseline)", color: "#d95926" },
-  trend: { label: "Mô hình + xu hướng", color: "#199e70" },
+  model: { color: "#3987e5" },
+  persistence: { color: "#d95926" },
+  trend: { color: "#199e70" },
 } as const;
 export type SeriesKey = keyof typeof SERIES;
 
-export const METRICS = [
-  { key: "csi", label: "CSI" },
-  { key: "accuracy", label: "Chính xác" },
-  { key: "pod", label: "Bắt được mưa" },
-  { key: "far", label: "Báo động giả" },
-] as const;
-export type Metric = (typeof METRICS)[number]["key"];
+export const METRICS = ["csi", "accuracy", "pod", "far"] as const;
+export type Metric = (typeof METRICS)[number];
 
 /** One lead time with the scores of each plotted series. */
 export type ChartRow = { lead_min: number; scores: Partial<Record<SeriesKey, Scores>> };
 
 export function AccuracyTab() {
+  const { t } = useLocale();
+  const a = t.admin.accuracy;
   const { data, error } = useAdminData<Accuracy>("/api/admin/accuracy");
   const [metric, setMetric] = useState<Metric>("csi");
   if (!data) return <Loading error={error} />;
@@ -42,62 +41,57 @@ export function AccuracyTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        <Stat label="CSI · mô hình" value={pct(head.model.csi)} sub={`chính xác ${pct(head.model.accuracy)}`} />
+        <Stat label={a.csiModel} value={pct(head.model.csi)} sub={a.accuracyPct(pct(head.model.accuracy))} />
         <Stat
-          label="CSI · mô hình + xu hướng"
+          label={a.csiTrend}
           value={shadow ? pct(shadow.trend.csi) : "–"}
-          sub={shadow ? `chính xác ${pct(shadow.trend.accuracy)}` : "chưa có dữ liệu"}
+          sub={shadow ? a.accuracyPct(pct(shadow.trend.accuracy)) : a.noData}
         />
-        <Stat label="CSI · baseline" value={pct(head.persistence.csi)} sub={`chính xác ${pct(head.persistence.accuracy)}`} />
+        <Stat label={a.csiBaseline} value={pct(head.persistence.csi)} sub={a.accuracyPct(pct(head.persistence.accuracy))} />
         <Stat
-          label="Sai số giờ mưa tới"
-          value={arrival.mae_min == null ? "–" : `±${arrival.mae_min.toFixed(0)} ph`}
+          label={a.arrivalError}
+          value={arrival.mae_min == null ? "–" : `±${t.units.minShort(+arrival.mae_min.toFixed(0))}`}
           sub={
             arrival.bias_min == null
-              ? "chưa có lần mưa tới nào"
-              : `${arrival.n} lần · ${arrival.bias_min > 0 ? "mưa tới trễ hơn" : "mưa tới sớm hơn"} dự báo ${Math.abs(arrival.bias_min).toFixed(0)} ph`
+              ? a.noArrivals
+              : a.arrivalBias(arrival.n, arrival.bias_min > 0, Math.abs(arrival.bias_min).toFixed(0))
           }
         />
       </div>
 
       <Panel
-        title={
-          shadow
-            ? `So sánh theo mốc · ${shadow.model.n} dự đoán có cả hai phiên bản`
-            : `Theo mốc dự báo · ${data.model.n} dự đoán`
-        }
+        title={shadow ? a.byLeadShadow(shadow.model.n) : a.byLead(data.model.n)}
         action={<MetricPicker value={metric} onChange={setMetric} />}
       >
         {rows.length ? (
           <LeadChart rows={rows} series={series} metric={metric} />
         ) : (
-          <p className="text-sm text-slate-500">Chưa có dự báo nào đủ thời gian để đối chiếu.</p>
+          <p className="text-sm text-slate-500">{a.nothingYet}</p>
         )}
         <p className="mt-3 text-xs leading-relaxed text-slate-500">
-          Dữ liệu thật từ {data.issued} lần dự báo của các trạm, chấm khi khung radar thật về tới. “Xu hướng” cho vùng mưa
-          mạnh lên hoặc yếu đi theo đà 20 phút gần nhất; nó chạy song song để so sánh, người dùng chưa thấy.
+          {a.chartNote(data.issued)}
         </p>
       </Panel>
 
-      <Panel title={`Bảng chi tiết · toàn bộ ${data.verified} dự đoán đã đối chiếu`}>
+      <Panel title={a.table(data.verified)}>
         <div className="overflow-x-auto">
           <table className="w-full min-w-[720px] text-sm">
             <thead>
               <tr className="border-b border-slate-800">
-                <th className={th}>Mốc</th>
-                <th className={th}>Số lần</th>
+                <th className={th}>{a.lead}</th>
+                <th className={th}>{a.count}</th>
                 <th className={th}>CSI</th>
-                <th className={th}>Chính xác</th>
-                <th className={th}>Bắt được mưa (POD)</th>
-                <th className={th}>Báo động giả (FAR)</th>
-                <th className={th}>Trúng / trượt / giả / đúng-không-mưa</th>
-                <th className={th}>Sai số dBZ</th>
+                <th className={th}>{a.metrics.accuracy}</th>
+                <th className={th}>{a.podFull}</th>
+                <th className={th}>{a.farFull}</th>
+                <th className={th}>{a.contingency}</th>
+                <th className={th}>{a.maeDbz}</th>
               </tr>
             </thead>
             <tbody>
               {data.leads.map((l) => (
                 <tr key={l.lead_min} className="border-b border-slate-800/60">
-                  <td className={`${td} text-slate-100`}>{l.lead_min} phút</td>
+                  <td className={`${td} text-slate-100`}>{t.units.min(l.lead_min)}</td>
                   <td className={td}>{l.model.n}</td>
                   <Cmp m={l.model.csi} b={l.persistence.csi} />
                   <Cmp m={l.model.accuracy} b={l.persistence.accuracy} />
@@ -111,7 +105,7 @@ export function AccuracyTab() {
           </table>
         </div>
         <p className="mt-3 text-xs text-slate-500">
-          Số nhỏ là baseline “trời giữ nguyên”. CSI = trúng / (trúng + trượt + giả), chỉ số chính để tối ưu.
+          {a.tableNote}
         </p>
       </Panel>
 
@@ -121,19 +115,20 @@ export function AccuracyTab() {
 }
 
 export function MetricPicker({ value, onChange }: { value: Metric; onChange: (m: Metric) => void }) {
+  const { t } = useLocale();
   return (
-    <div className="flex flex-wrap gap-1" role="group" aria-label="Chỉ số">
+    <div className="flex flex-wrap gap-1" role="group" aria-label={t.admin.accuracy.metricGroup}>
       {METRICS.map((m) => (
         <button
-          key={m.key}
+          key={m}
           type="button"
-          onClick={() => onChange(m.key)}
-          aria-pressed={value === m.key}
+          onClick={() => onChange(m)}
+          aria-pressed={value === m}
           className={`cursor-pointer rounded-lg px-3 py-1 text-xs ${
-            value === m.key ? "bg-slate-700 text-slate-50" : "text-slate-400 hover:text-slate-200"
+            value === m ? "bg-slate-700 text-slate-50" : "text-slate-400 hover:text-slate-200"
           }`}
         >
-          {m.label}
+          {t.admin.accuracy.metrics[m]}
         </button>
       ))}
     </div>
@@ -157,6 +152,7 @@ const PAD = { top: 12, right: 8, bottom: 28, left: 40 };
 
 /** Grouped bars: one bar per series at each lead time. */
 export function LeadChart({ rows, series, metric }: { rows: ChartRow[]; series: SeriesKey[]; metric: Metric }) {
+  const { t } = useLocale();
   const [hover, setHover] = useState<{ lead: number; key: SeriesKey; x: number; y: number } | null>(null);
   const iw = W - PAD.left - PAD.right;
   const ih = H - PAD.top - PAD.bottom;
@@ -172,11 +168,11 @@ export function LeadChart({ rows, series, metric }: { rows: ChartRow[]; series: 
         {series.map((k) => (
           <span key={k} className="inline-flex items-center gap-1.5">
             <span className="size-2.5 rounded-sm" style={{ background: SERIES[k].color }} />
-            {SERIES[k].label}
+            {t.admin.accuracy.series[k]}
           </span>
         ))}
       </div>
-      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="Chỉ số theo mốc dự báo">
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={t.admin.accuracy.chartLabel}>
         {[0, 0.25, 0.5, 0.75, 1].map((v) => (
           <g key={v}>
             <line x1={PAD.left} x2={W - PAD.right} y1={y(v)} y2={y(v)} stroke="#1e293b" />
@@ -238,6 +234,8 @@ function Tooltip({
   metric: Metric;
   style: React.CSSProperties;
 }) {
+  const { t } = useLocale();
+  const a = t.admin.accuracy;
   const s = SERIES[seriesKey];
   const sc = row.scores[seriesKey]!;
   return (
@@ -247,13 +245,13 @@ function Tooltip({
     >
       <p className="flex items-center gap-1.5 text-slate-300">
         <span className="size-2 rounded-sm" style={{ background: s.color }} />
-        {s.label} · +{row.lead_min} phút
+        {a.series[seriesKey]} · +{t.units.min(row.lead_min)}
       </p>
       <p className="mt-1 text-base font-semibold text-slate-50">
-        {pct(sc[metric])} <span className="text-xs font-normal text-slate-400">{METRICS.find((m) => m.key === metric)!.label}</span>
+        {pct(sc[metric])} <span className="text-xs font-normal text-slate-400">{a.metrics[metric]}</span>
       </p>
       <p className="text-slate-400">
-        {sc.n} lần · trúng/trượt/giả/đúng: {contingency(sc)}
+        {a.tooltipCases(sc.n, contingency(sc))}
       </p>
     </div>
   );

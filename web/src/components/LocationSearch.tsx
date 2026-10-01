@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useState } from "react";
 import { geocode, suggest, type Place } from "@/lib/api";
+import { errorText, useLocale } from "@/lib/i18n";
 import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
 
 type Props = {
@@ -24,6 +25,7 @@ type Results = { query: string; places: Place[] };
 type Item = { kind: "place" | "recent"; place: Place };
 
 export function LocationSearch({ onSelect, near }: Props) {
+  const { t } = useLocale();
   const listId = useId();
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<Results | null>(null);
@@ -83,7 +85,7 @@ export function LocationSearch({ onSelect, near }: Props) {
       // The address providers only know OpenStreetMap; a Google Maps link
       // carries its own coordinates, so it works for places OSM lacks.
       if (found.length === 0)
-        setError(`Không tìm thấy “${text}”. Thử dán link Google Maps của địa điểm.`);
+        setError(t.search.notFound(text));
       else if (found.length === 1) choose(found[0]);
       else {
         setResults({ query: text, places: found });
@@ -139,9 +141,9 @@ export function LocationSearch({ onSelect, near }: Props) {
           onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
           onKeyDown={onKeyDown}
-          placeholder="Địa chỉ, link Google Maps hoặc tọa độ"
+          placeholder={t.search.placeholder}
           role="combobox"
-          aria-label="Tìm vị trí"
+          aria-label={t.search.label}
           aria-autocomplete="list"
           aria-expanded={showList}
           aria-controls={listId}
@@ -154,17 +156,17 @@ export function LocationSearch({ onSelect, near }: Props) {
           disabled={busy || !q}
           className="rounded-xl bg-sky-500 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
         >
-          {busy ? "Đang tìm…" : "Tìm"}
+          {busy ? t.search.busy : t.search.submit}
         </button>
       </form>
 
-      {error && <p className="mt-2 text-sm text-amber-300">{error}</p>}
+      {error && <p className="mt-2 text-sm text-amber-300">{errorText(t, error)}</p>}
 
       {showList && (
         <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
           {!q && (
             <div className="flex items-center justify-between px-4 pt-3 pb-1 text-xs text-slate-500">
-              <span>Tìm gần đây</span>
+              <span>{t.search.recent}</span>
               <button
                 type="button"
                 // mousedown keeps focus in the input so the list stays open.
@@ -174,7 +176,7 @@ export function LocationSearch({ onSelect, near }: Props) {
                 }}
                 className="cursor-pointer hover:text-slate-300"
               >
-                Xoá
+                {t.search.clear}
               </button>
             </div>
           )}

@@ -2,8 +2,10 @@
 
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { fetchForecast, type Forecast, type Place } from "@/lib/api";
+import { errorText, useLocale } from "@/lib/i18n";
 import { ForecastCard } from "./ForecastCard";
 import { Intro } from "./Intro";
+import { LanguageSwitch } from "./LanguageSwitch";
 import { LocationSearch } from "./LocationSearch";
 
 const REFRESH_MS = 60_000;
@@ -50,6 +52,7 @@ function parsePlace(raw: string | null | undefined): Place | null | undefined {
 }
 
 export function Dashboard() {
+  const { t } = useLocale();
   const raw = useSyncExternalStore(subscribe, readRaw, () => undefined);
   /** null = nothing chosen yet; undefined = not hydrated yet. */
   const place = useMemo(() => parsePlace(raw), [raw]);
@@ -91,6 +94,7 @@ export function Dashboard() {
 
   return (
     <main className="flex flex-1 flex-col items-center px-4 py-10">
+      <LanguageSwitch title="title" />
       <LocationSearch onSelect={select} near={place ?? null} />
 
       {place && (
@@ -101,7 +105,7 @@ export function Dashboard() {
             onClick={() => select(null)}
             className="ml-3 text-sky-400 hover:underline cursor-pointer"
           >
-            Bỏ chọn
+            {t.dashboard.unselect}
           </button>
         </p>
       )}
@@ -111,16 +115,16 @@ export function Dashboard() {
         {place && forecast && <ForecastCard forecast={forecast} now={now} />}
         {place && !forecast && !error && (
           <p className="animate-pulse text-slate-500" aria-busy="true">
-            Đang xem radar…
+            {t.dashboard.loading}
           </p>
         )}
         {place && error && (
-          <p className="mt-8 max-w-md text-center text-sm text-amber-300">{error}</p>
+          <p className="mt-8 max-w-md text-center text-sm text-amber-300">{errorText(t, error)}</p>
         )}
       </div>
 
       <footer className="text-center text-xs text-slate-600">
-        Radar: RainViewer · Địa chỉ: ©{" "}
+        Radar: RainViewer · {t.dashboard.footerAddress}: ©{" "}
         <a
           href="https://www.openstreetmap.org/copyright"
           className="hover:text-slate-400"

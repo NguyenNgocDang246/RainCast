@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import type { BacktestReport, Scores } from "@/lib/admin";
+import type { BacktestReport, BacktestResult, Scores } from "@/lib/admin";
 import { adminPost } from "@/lib/admin";
 import { dateTime, pct } from "@/lib/adminFormat";
-import { Panel, td, th, useAdminData } from "./ui";
+import { useLocale } from "@/lib/i18n";
+import { ErrorText, Panel, td, th, useAdminData } from "./ui";
 
 /**
  * Re-scores every stored radar frame with several model settings, on ~1,000
@@ -12,6 +13,8 @@ import { Panel, td, th, useAdminData } from "./ui";
  * more cases than the stations alone provide.
  */
 export function BacktestPanel() {
+  const { locale, t } = useLocale();
+  const b = t.admin.backtest;
   const { data: saved, error } = useAdminData<BacktestReport | null>("/api/admin/backtest", 600_000);
   const [fresh, setFresh] = useState<BacktestReport | null>(null);
   const [running, setRunning] = useState(false);
@@ -32,12 +35,20 @@ export function BacktestPanel() {
 
   const results = report?.results ?? [];
   const leads = results[0]?.leads.map((l) => l.lead_min) ?? [];
+  // Reports saved before pairs/trend/baseline existed only have the
+  // Vietnamese name ("4 cặp + xu hướng"); the baseline is always row 0.
+  const label = (r: BacktestResult, i: number) => {
+    if (r.baseline ?? i === 0) return b.baseline;
+    const m = r.name.match(/^(\d+) cặp( \+ xu hướng)?$/);
+    const pairs = r.pairs ?? (m ? Number(m[1]) : 0);
+    return pairs ? b.variant(pairs, r.trend ?? !!m?.[2]) : r.name;
+  };
   // The best overall CSI among model variants (the baseline is row 0).
   const best = results.slice(1).reduce<number | null>((m, r) => Math.max(m ?? 0, r.overall.csi ?? 0), null);
 
   return (
     <Panel
-      title="Backtest trên dữ liệu radar đã lưu"
+      title={b.title}
       action={
         <button
           type="button"
@@ -45,37 +56,41 @@ export function BacktestPanel() {
           disabled={running}
           className="cursor-pointer rounded-lg bg-sky-500 px-3 py-1.5 text-xs font-medium text-slate-950 hover:bg-sky-400 disabled:cursor-wait disabled:opacity-60"
         >
-          {running ? "Đang chạy…" : "Chạy backtest"}
+          {running ? b.running : b.run}
         </button>
       }
     >
-      {(runError || error) && <p className="mb-3 text-sm text-amber-300">Lỗi: {runError ?? error}</p>}
+      {(runError || error) && <ErrorText error={(runError ?? error)!} className="mb-3" />}
       {!report ? (
-        <p className="text-sm text-slate-500">Chưa chạy lần nào. Bấm “Chạy backtest” để chấm lại toàn bộ khung đã lưu.</p>
+        <p className="text-sm text-slate-500">{b.never}</p>
       ) : report.issues === 0 ? (
-        <p className="text-sm text-slate-500">
-          Chưa đủ dữ liệu: cần ít nhất 9 khung liên tiếp trước và 6 khung sau một thời điểm (đã có {report.frames} khung).
-        </p>
+        <p className="text-sm text-slate-500">{b.notEnough(report.frames)}</p>
       ) : (
         <>
           <p className="mb-4 text-xs text-slate-500">
-            {report.issues} thời điểm dự báo ({dateTime(new Date(report.from * 1000).toISOString())} →{" "}
-            {dateTime(new Date(report.to * 1000).toISOString())}) × {report.points} điểm quanh trạm chính · {report.frames}{" "}
-            khung · chạy lúc {dateTime(report.generated_at)} ({report.duration})
+            {b.summary(
+              report.issues,
+              dateTime(new Date(report.from * 1000).toISOString(), locale),
+              dateTime(new Date(report.to * 1000).toISOString(), locale),
+              report.points,
+              report.frames,
+              dateTime(report.generated_at, locale),
+              report.duration,
+            )}
           </p>
           <div className="overflow-x-auto">
             <table className="w-full min-w-[820px] text-sm">
               <thead>
                 <tr className="border-b border-slate-800">
-                  <th className={th}>Cấu hình</th>
+                  <th className={th}>{b.config}</th>
                   {leads.map((l) => (
                     <th key={l} className={th}>
                       CSI +{l}′
                     </th>
                   ))}
-                  <th className={th}>CSI tổng</th>
-                  <th className={th}>Bắt được mưa</th>
-                  <th className={th}>Báo động giả</th>
+                  <th className={th}>{b.csiTotal}</th>
+                  <th className={th}>{t.admin.accuracy.metrics.pod}</th>
+                  <th className={th}>{t.admin.accuracy.metrics.far}</th>
                 </tr>
               </thead>
               <tbody>
@@ -84,8 +99,8 @@ export function BacktestPanel() {
                   return (
                     <tr key={r.name} className="border-b border-slate-800/60">
                       <td className={`${td} ${top ? "font-semibold text-slate-50" : "text-slate-100"}`}>
-                        {r.name}
-                        {top && <span className="ml-2 text-xs font-normal text-sky-400">tốt nhất</span>}
+                        {label(r, i)}
+                        {top && <span className="ml-2 text-xs font-normal text-sky-400">{b.best}</span>}
                       </td>
                       {r.leads.map((l) => (
                         <td key={l.lead_min} className={td}>
@@ -102,8 +117,7 @@ export function BacktestPanel() {
             </table>
           </div>
           <p className="mt-3 text-xs leading-relaxed text-slate-500">
-            “N cặp” là số cặp khung (10 phút) dùng để ước lượng chuyển động; “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu
-            hình chấm trên cùng các thời điểm và điểm. Dữ liệu tile được giữ 7 ngày.
+            {b.note}
           </p>
         </>
       )}

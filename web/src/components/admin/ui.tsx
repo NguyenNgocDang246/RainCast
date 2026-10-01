@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { adminGet } from "@/lib/admin";
+import { errorText, useLocale } from "@/lib/i18n";
 
 /** Loads an admin endpoint and refreshes it periodically. */
 export function useAdminData<T>(path: string, refreshMs = 60_000) {
@@ -56,21 +57,25 @@ export function Stat({ label, value, sub }: { label: string; value: React.ReactN
 }
 
 export function Loading({ error }: { error: string | null }) {
-  return error ? (
-    <p className="text-sm text-amber-300">Lỗi: {error}</p>
-  ) : (
-    <p className="animate-pulse text-sm text-slate-500">Đang tải…</p>
-  );
+  const { t } = useLocale();
+  return error ? <ErrorText error={error} /> : <p className="animate-pulse text-sm text-slate-500">{t.admin.ui.loading}</p>;
+}
+
+/** "Error: …" with known backend messages translated. */
+export function ErrorText({ error, className = "" }: { error: string; className?: string }) {
+  const { t } = useLocale();
+  return <p className={`text-sm text-amber-300 ${className}`}>{t.admin.ui.error(errorText(t, error))}</p>;
 }
 
 /** Hit / miss marker that never relies on color alone. */
 export function Verdict({ ok }: { ok: boolean }) {
+  const { t } = useLocale();
   return (
     <span className="inline-flex items-center gap-1 text-slate-300">
       <span aria-hidden className={ok ? "text-[#0ca30c]" : "text-[#d03b3b]"}>
         {ok ? "✓" : "✗"}
       </span>
-      {ok ? "đúng" : "sai"}
+      {ok ? t.admin.ui.hit : t.admin.ui.miss}
     </span>
   );
 }

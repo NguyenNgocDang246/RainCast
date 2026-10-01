@@ -21,19 +21,12 @@ export type Forecast = {
 
 export type Place = { name: string; address: string; lat: number; lon: number };
 
-const MESSAGES: Record<string, string> = {
-  "link has no location": "Link này không chứa vị trí. Hãy mở địa điểm trong Google Maps rồi chia sẻ lại.",
-  "address lookup failed": "Không tra được địa chỉ, thử lại sau ít giây.",
-  "radar data is still loading; try again shortly": "Đang tải dữ liệu radar, thử lại sau ít giây.",
-  "could not load radar data for this location": "Không tải được radar cho vị trí này.",
-};
-
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   const res = await fetch(path, { cache: "no-store", signal });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    const msg: string = body?.error ?? `HTTP ${res.status}`;
-    throw new Error(MESSAGES[msg] ?? msg);
+    // Kept in the backend's words; components translate with errorText.
+    throw new Error(body?.error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
 }
