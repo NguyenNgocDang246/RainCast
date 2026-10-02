@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"raincast/internal/app"
+	"raincast/app"
 	"raincast/internal/dotenv"
 	"raincast/internal/env"
 	"raincast/internal/geocode"

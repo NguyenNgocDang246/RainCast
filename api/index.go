@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"raincast/internal/app"
+	"raincast/app"
 	"raincast/internal/env"
 	"raincast/internal/geocode"
 	"raincast/internal/pipeline"
