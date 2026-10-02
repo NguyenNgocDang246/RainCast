@@ -28,7 +28,7 @@ export const vi = {
   dashboard: {
     unselect: "Bỏ chọn",
     loading: "Đang xem radar…",
-    footerAddress: "Địa chỉ",
+    footerAddress: "Địa chỉ & bản đồ",
   },
 
   intro: {
@@ -39,6 +39,13 @@ export const vi = {
     mapsLink: "Link Google Maps",
     mapsLinkExample: "Sao chép đường liên kết",
     coords: "Tọa độ",
+    map: "Bản đồ",
+    mapExample: "Bấm vào điểm bất kỳ",
+  },
+
+  map: {
+    label: "Bản đồ chọn vị trí",
+    hint: "Bấm vào bản đồ hoặc kéo ghim để chọn điểm",
   },
 
   search: {
@@ -116,7 +123,7 @@ export const vi = {
       cachedRegions: "Vùng đang cache",
       forOnDemand: "cho dự báo theo yêu cầu",
       stations: (n: number, names: string, since: string) =>
-        `${n} trạm thu thập dữ liệu chấm điểm: ${names} · chạy từ ${since}`,
+        `Vị trí mặc định: ${names.split(", ")[0]} · ${n} vị trí đặt sẵn · chạy từ ${since}`,
       lastError: "Lỗi lần poll gần nhất:",
 
       stored: "Dữ liệu đã lưu",
@@ -127,10 +134,13 @@ export const vi = {
       verified: "Đã đối chiếu",
       lookups: "Lượt tra cứu của người dùng",
 
-      geocoding: (on: boolean) => `Geocoding (từ lần khởi động) · LocationIQ ${on ? "bật" : "tắt"}`,
+      geocoding: (on: boolean) => `Geoapify (từ lần khởi động) · ${on ? "đã có key" : "chưa có key"}`,
       cacheHits: "Trả từ cache",
-      rateLimited: (limited: number, errors: number) => `${limited} lần hết lượt · ${errors} lỗi`,
-      errors: (n: number) => `${n} lỗi`,
+      failed: "Lỗi",
+      rateLimited: (n: number) => `${n} lần hết lượt`,
+      tiles: "Ô bản đồ tải về",
+      tilesSub: (cached: number, errors: number) => `${cached} từ cache · ${errors} lỗi`,
+
     },
 
     accuracy: {
@@ -174,19 +184,49 @@ export const vi = {
 
     backtest: {
       title: "Backtest trên dữ liệu radar đã lưu",
-      run: "Chạy backtest",
-      running: "Đang chạy…",
-      never: "Chưa chạy lần nào. Bấm “Chạy backtest” để chấm lại toàn bộ khung đã lưu.",
+      howToRun: "cập nhật: go run ./cmd/backtest",
+      never: "Chưa có kết quả. Chạy go run ./cmd/backtest sau khi go run ./cmd/collect đã thu được dữ liệu.",
       notEnough: (frames: number) =>
         `Chưa đủ dữ liệu: cần ít nhất 9 khung liên tiếp trước và 6 khung sau một thời điểm (đã có ${frames} khung).`,
       summary: (issues: number, from: string, to: string, points: number, frames: number, at: string, took: string) =>
-        `${issues} thời điểm dự báo (${from} → ${to}) × ${points} điểm quanh trạm chính · ${frames} khung · chạy lúc ${at} (${took})`,
+        `${issues} thời điểm dự báo (${from} → ${to}) × tối đa ${points} điểm mỗi vùng · ${frames} khung · chạy lúc ${at} (${took})`,
+      events: (events: number, regions: number) => `${events} đợt mưa từ ${regions} vùng.`,
+      fewEvents: (need: number) =>
+        `Chưa đủ ${need} đợt mưa: chênh lệch giữa các cấu hình lúc này có thể chỉ là nhiễu.`,
+      groups: "Theo nhóm khí hậu",
+      group: "Nhóm",
+      regionsCol: "Vùng",
+      eventsCol: "Đợt mưa",
+      baselineCsi: "CSI giữ nguyên",
+      climates: { tropical: "nhiệt đới", subtropical: "cận nhiệt", midlat: "ôn đới" } as Record<string, string>,
+      bestCol: "Cấu hình tốt nhất",
       config: "Cấu hình",
       csiTotal: "CSI tổng",
       best: "tốt nhất",
       baseline: "Giữ nguyên (baseline)",
       variant: (pairs: number, trend: boolean) => `${pairs} cặp${trend ? " + xu hướng" : ""}`,
-      note: "“N cặp” là số cặp khung (10 phút) dùng để ước lượng chuyển động; “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng các thời điểm và điểm. Dữ liệu tile được giữ 7 ngày.",
+      methods: {
+        trec: "TREC",
+        cotrec: "COTREC",
+        hs: "Horn–Schunck",
+        lk: "Lucas–Kanade",
+        "cell-nn": "Cell NN",
+        "cell-hung": "Cell Hungarian",
+        hybrid: "Hybrid",
+        ensemble: "Ensemble trung bình",
+        vote: "Ensemble bỏ phiếu",
+      } as Record<string, string>,
+      pairsSuffix: (pairs: number) => ` ${pairs} cặp`,
+      trendSuffix: " + xu hướng",
+      csiCi: "CSI tổng [95%]",
+      delta: "Δ so với TREC 4 cặp",
+      bss: "BSS",
+      auc: "AUC",
+      ms: "ms/lần",
+      better: "chắc chắn tốt hơn",
+      worse: "chắc chắn kém hơn",
+      intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
+      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
     },
 
     history: {
@@ -214,7 +254,8 @@ export const vi = {
 
     tools: {
       inspect: "Xem một vị trí",
-      placeholder: "Địa chỉ, link Google Maps, tọa độ — để trống = điểm theo dõi",
+      placeholder: "Địa chỉ, link Google Maps hoặc tọa độ",
+      pickPlace: "Nhập một vị trí để xem radar và dự báo.",
       view: "Xem",
       busy: "Đang tìm…",
       notFound: "Không tìm thấy địa điểm.",

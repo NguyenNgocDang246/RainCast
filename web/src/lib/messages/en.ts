@@ -27,7 +27,7 @@ export const en: Dict = {
   dashboard: {
     unselect: "Clear",
     loading: "Checking the radar…",
-    footerAddress: "Addresses",
+    footerAddress: "Addresses & map",
   },
 
   intro: {
@@ -38,6 +38,13 @@ export const en: Dict = {
     mapsLink: "Google Maps link",
     mapsLinkExample: "Copy the share link",
     coords: "Coordinates",
+    map: "Map",
+    mapExample: "Click any point",
+  },
+
+  map: {
+    label: "Map for picking a place",
+    hint: "Click the map or drag the pin to pick a point",
   },
 
   search: {
@@ -114,7 +121,7 @@ export const en: Dict = {
       feedKeeps: "RainViewer keeps ~2 hours",
       cachedRegions: "Cached regions",
       forOnDemand: "for on-demand forecasts",
-      stations: (n, names, since) => `${n} stations collecting scoring data: ${names} · running since ${since}`,
+      stations: (n, names, since) => `Default location: ${names.split(", ")[0]} · ${n} preset places · running since ${since}`,
       lastError: "Last poll error:",
 
       stored: "Stored data",
@@ -125,10 +132,13 @@ export const en: Dict = {
       verified: "Verified",
       lookups: "User lookups",
 
-      geocoding: (on) => `Geocoding (since start) · LocationIQ ${on ? "on" : "off"}`,
+      geocoding: (on) => `Geoapify (since start) · ${on ? "key set" : "no key"}`,
       cacheHits: "Served from cache",
-      rateLimited: (limited, errors) => `${limited} rate-limited · ${errors} errors`,
-      errors: (n) => `${n} errors`,
+      failed: "Failed",
+      rateLimited: (n) => `${n} rate-limited`,
+      tiles: "Map tiles fetched",
+      tilesSub: (cached, errors) => `${cached} from cache · ${errors} errors`,
+
     },
 
     accuracy: {
@@ -171,19 +181,48 @@ export const en: Dict = {
 
     backtest: {
       title: "Backtest on stored radar data",
-      run: "Run backtest",
-      running: "Running…",
-      never: "Not run yet. Click “Run backtest” to re-score every stored frame.",
+      howToRun: "refresh: go run ./cmd/backtest",
+      never: "No results yet. Run go run ./cmd/backtest once go run ./cmd/collect has gathered data.",
       notEnough: (frames) =>
         `Not enough data: needs at least 9 consecutive frames before and 6 after a time (${frames} frames so far).`,
       summary: (issues, from, to, points, frames, at, took) =>
-        `${issues} forecast times (${from} → ${to}) × ${points} points around the main station · ${frames} frames · run at ${at} (${took})`,
+        `${issues} forecast times (${from} → ${to}) × up to ${points} points per region · ${frames} frames · run at ${at} (${took})`,
+      events: (events, regions) => `${events} rain events from ${regions} regions.`,
+      fewEvents: (need) => `Fewer than ${need} rain events: differences between settings may still be noise.`,
+      groups: "By climate group",
+      group: "Group",
+      regionsCol: "Regions",
+      eventsCol: "Rain events",
+      baselineCsi: "Persistence CSI",
+      climates: { tropical: "tropical", subtropical: "subtropical", midlat: "mid-latitude" },
+      bestCol: "Best setting",
       config: "Setting",
       csiTotal: "Overall CSI",
       best: "best",
       baseline: "Persistence (baseline)",
       variant: (pairs, trend) => `${pairs} ${pairs === 1 ? "pair" : "pairs"}${trend ? " + trend" : ""}`,
-      note: "“N pairs” is how many frame pairs (10 min apart) estimate the motion; “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points. Tiles are kept for 7 days.",
+      methods: {
+        trec: "TREC",
+        cotrec: "COTREC",
+        hs: "Horn–Schunck",
+        lk: "Lucas–Kanade",
+        "cell-nn": "Cell NN",
+        "cell-hung": "Cell Hungarian",
+        hybrid: "Hybrid",
+        ensemble: "Ensemble mean",
+        vote: "Ensemble vote",
+      },
+      pairsSuffix: (pairs) => ` ${pairs} ${pairs === 1 ? "pair" : "pairs"}`,
+      trendSuffix: " + trend",
+      csiCi: "Overall CSI [95%]",
+      delta: "Δ vs TREC 4 pairs",
+      bss: "BSS",
+      auc: "AUC",
+      ms: "ms/run",
+      better: "surely better",
+      worse: "surely worse",
+      intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
+      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). ms/run: rough compute time. “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
     },
 
     history: {
@@ -211,7 +250,8 @@ export const en: Dict = {
 
     tools: {
       inspect: "Inspect a location",
-      placeholder: "Address, Google Maps link, coordinates — empty = tracked point",
+      placeholder: "Address, Google Maps link or coordinates",
+      pickPlace: "Enter a place to see its radar and forecast.",
       view: "View",
       busy: "Searching…",
       notFound: "Place not found.",

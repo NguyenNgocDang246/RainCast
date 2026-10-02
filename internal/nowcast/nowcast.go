@@ -21,7 +21,16 @@ type Options struct {
 	// rate·τ·(1−e^(−m/τ)), so a trend never runs away over the hour.
 	Trend    *motion.Trend
 	TrendTau float64 // minutes; default 20
+	// ProbRadius, when set, also yields a rain probability per minute: the
+	// share of pixels at or above Threshold within ProbRadius(m) pixels of
+	// the upstream point. The radius grows with lead time because position
+	// errors do.
+	ProbRadius func(minute int) int
 }
+
+// DefaultProbRadius widens from 2 px (~2.5 km) now to 10 px (~12 km) at an
+// hour.
+func DefaultProbRadius(m int) int { return 2 + m*8/60 }
 
 // trendCeiling caps grown echoes at a realistic reflectivity.
 const trendCeiling = 60
@@ -30,6 +39,8 @@ const trendCeiling = 60
 type Point struct {
 	Minute int     `json:"minute"`
 	DBZ    float32 `json:"dbz"`
+	// Prob is the chance of rain, when Options.ProbRadius is set.
+	Prob float32 `json:"prob,omitempty"`
 }
 
 // Result is a forecast for one target point.
@@ -48,6 +59,15 @@ type Result struct {
 	MotionReliable bool    `json:"motion_reliable"`
 }
 
+// ProbAt returns the rain probability at minute m (clamped to the series).
+func (r Result) ProbAt(m int) float32 {
+	if len(r.Series) == 0 {
+		return 0
+	}
+	m = max(0, min(m, len(r.Series)-1))
+	return r.Series[m].Prob
+}
+
 // At returns the predicted dBZ at minute m (clamped to the series).
 func (r Result) At(m int) float32 {
 	if len(r.Series) == 0 {
@@ -61,7 +81,7 @@ func (r Result) At(m int) float32 {
 // will be over the target in m minutes is the one now at the upstream point
 // (semi-Lagrangian advection, assuming steady motion and no growth/decay).
 func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result {
-	r := Result{ArrivalMin: -1, HeavyArrivalMin: -1, Series: make([]Point, 0, opt.Horizon+1)}
+	r := Result{Series: make([]Point, 0, opt.Horizon+1)}
 	tau := opt.TrendTau
 	if tau <= 0 {
 		tau = 20
@@ -70,25 +90,27 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 	for m := 0; m <= opt.Horizon; m++ {
 		v := g.MedianInRadius(px, py, opt.Radius)
 		// Only existing echoes change; empty sky does not grow rain.
-		if opt.Trend != nil && m > 0 && v >= 10 {
-			eff := tau * (1 - math.Exp(-float64(m)/tau))
-			v = float32(math.Min(float64(v)+opt.Trend.At(px, py)*eff, trendCeiling))
+		var delta float64
+		if opt.Trend != nil && m > 0 {
+			delta = opt.Trend.At(px, py) * tau * (1 - math.Exp(-float64(m)/tau))
 		}
-		r.Series = append(r.Series, Point{Minute: m, DBZ: v})
-		if v >= opt.Threshold && r.ArrivalMin < 0 {
-			r.ArrivalMin = m
+		if delta != 0 && v >= 10 {
+			v = float32(math.Min(float64(v)+delta, trendCeiling))
 		}
-		if opt.Heavy > 0 && v >= opt.Heavy && r.HeavyArrivalMin < 0 {
-			r.HeavyArrivalMin = m
+		pt := Point{Minute: m, DBZ: v}
+		if opt.ProbRadius != nil {
+			if rad := opt.ProbRadius(m); rad >= 0 {
+				pt.Prob = rainShare(g, px, py, rad, opt.Threshold, float32(delta))
+			}
 		}
+		r.Series = append(r.Series, pt)
 		if f != nil {
 			d := f.At(px, py)
 			px -= d.DX
 			py -= d.DY
 		}
 	}
-	r.RainingNow = r.ArrivalMin == 0
-	r.HeavyNow = r.HeavyArrivalMin == 0
+	r = Summarize(r.Series, opt)
 
 	if f != nil {
 		r.MotionReliable = f.Reliable()
@@ -98,4 +120,44 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 		r.DirectionDeg = math.Mod(math.Atan2(v.DX, -v.DY)*180/math.Pi+360, 360)
 	}
 	return r
+}
+
+// Summarize fills a result's arrival times from its series: the first
+// minute at or above opt.Threshold (rain) and opt.Heavy (heavy rain).
+func Summarize(series []Point, opt Options) Result {
+	r := Result{Series: series, ArrivalMin: -1, HeavyArrivalMin: -1}
+	for _, pt := range series {
+		if pt.DBZ >= opt.Threshold && r.ArrivalMin < 0 {
+			r.ArrivalMin = pt.Minute
+		}
+		if opt.Heavy > 0 && pt.DBZ >= opt.Heavy && r.HeavyArrivalMin < 0 {
+			r.HeavyArrivalMin = pt.Minute
+		}
+	}
+	r.RainingNow = r.ArrivalMin == 0
+	r.HeavyNow = r.HeavyArrivalMin == 0
+	return r
+}
+
+// rainShare is the share of pixels within r of (x, y) at or above thr after
+// adding delta to existing echoes.
+func rainShare(g *radar.Grid, x, y float64, r int, thr, delta float32) float32 {
+	cx, cy := int(math.Round(x)), int(math.Round(y))
+	var n, rain int
+	for dy := -r; dy <= r; dy++ {
+		for dx := -r; dx <= r; dx++ {
+			if dx*dx+dy*dy > r*r {
+				continue
+			}
+			n++
+			v := g.At(cx+dx, cy+dy)
+			if v >= 10 {
+				v = min(v+delta, trendCeiling)
+			}
+			if v >= thr {
+				rain++
+			}
+		}
+	}
+	return float32(rain) / float32(n)
 }

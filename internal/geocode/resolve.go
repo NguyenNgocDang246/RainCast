@@ -29,7 +29,15 @@ var (
 func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
 	input = strings.TrimSpace(input)
 	if lat, lon, ok := ParseCoords(input); ok {
-		return []Place{{Name: fmt.Sprintf("%.5f, %.5f", lat, lon), Lat: lat, Lon: lon}}, nil
+		// The name is best-effort: the coordinates alone are enough.
+		p, err := c.Reverse(ctx, lat, lon)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			c.logf("reverse failed, using coordinates", "err", err)
+		}
+		return []Place{p}, nil
 	}
 	// Share sheets often copy "Place name\nhttps://maps.app.goo.gl/…".
 	if link := urlRe.FindString(input); link != "" {
@@ -109,7 +117,7 @@ func ParseMapsURL(u *url.URL) (p Place, hasCoords bool) {
 
 func withDefaultName(p Place) Place {
 	if p.Name == "" {
-		p.Name = fmt.Sprintf("%.5f, %.5f", p.Lat, p.Lon)
+		p.Name = coordsPlace(p.Lat, p.Lon).Name
 	}
 	return p
 }

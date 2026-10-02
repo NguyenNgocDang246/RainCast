@@ -47,16 +47,14 @@ export function OverviewTab() {
         </div>
       </Panel>
 
-      <Panel title={o.geocoding(g.locationiq_enabled)}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+      <Panel title={o.geocoding(g.geoapify_enabled)}>
+        <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
           <Stat label={o.cacheHits} value={g.cache_hits} />
-          <Stat
-            label="LocationIQ"
-            value={g.locationiq_ok}
-            sub={o.rateLimited(g.locationiq_rate_limited, g.locationiq_errors)}
-          />
-          <Stat label="Photon" value={g.photon_ok} sub={o.errors(g.photon_errors)} />
-          <Stat label="Nominatim" value={g.nominatim_ok} sub={o.errors(g.nominatim_errors)} />
+          <Stat label="Autocomplete" value={g.autocomplete_ok} />
+          <Stat label="Search" value={g.search_ok} />
+          <Stat label="Reverse" value={g.reverse_ok} />
+          <Stat label={o.failed} value={g.errors} sub={o.rateLimited(g.rate_limited)} />
+          <Stat label={o.tiles} value={g.tile_fetched} sub={o.tilesSub(g.tile_cache_hits, g.tile_errors)} />
         </div>
       </Panel>
     </div>

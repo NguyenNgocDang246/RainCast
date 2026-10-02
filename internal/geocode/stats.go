@@ -5,60 +5,58 @@ import (
 	"sync/atomic"
 )
 
-// counters tracks which provider served each lookup since start.
+// counters tracks Geoapify usage since start.
 type counters struct {
-	cacheHits                    atomic.Int64
-	liqOK, liqLimited, liqErrors atomic.Int64
-	photonOK, photonErrors       atomic.Int64
-	nominatimOK, nominatimErrors atomic.Int64
+	cacheHits                              atomic.Int64
+	autocompleteOK, searchOK, reverseOK    atomic.Int64
+	rateLimited, errors                    atomic.Int64
+	tileCacheHits, tileFetched, tileErrors atomic.Int64
 }
 
-// Stats is a snapshot of provider usage since start.
+// Stats is a snapshot of Geoapify usage since start.
 type Stats struct {
-	LocationIQEnabled bool  `json:"locationiq_enabled"`
-	CacheHits         int64 `json:"cache_hits"`
-	LocationIQOK      int64 `json:"locationiq_ok"`
-	// LocationIQLimited counts requests sent to Photon instead because the
-	// local quota was used up or LocationIQ answered 429.
-	LocationIQLimited int64 `json:"locationiq_rate_limited"`
-	LocationIQErrors  int64 `json:"locationiq_errors"`
-	PhotonOK          int64 `json:"photon_ok"`
-	PhotonErrors      int64 `json:"photon_errors"`
-	NominatimOK       int64 `json:"nominatim_ok"`
-	NominatimErrors   int64 `json:"nominatim_errors"`
+	GeoapifyEnabled bool  `json:"geoapify_enabled"`
+	CacheHits       int64 `json:"cache_hits"`
+	AutocompleteOK  int64 `json:"autocomplete_ok"`
+	SearchOK        int64 `json:"search_ok"`
+	ReverseOK       int64 `json:"reverse_ok"`
+	// RateLimited counts lookups refused by Geoapify (429) or skipped
+	// during the cool-down after one.
+	RateLimited   int64 `json:"rate_limited"`
+	Errors        int64 `json:"errors"`
+	TileCacheHits int64 `json:"tile_cache_hits"`
+	TileFetched   int64 `json:"tile_fetched"`
+	TileErrors    int64 `json:"tile_errors"`
 }
 
-// Stats returns provider usage counters.
+// Stats returns usage counters.
 func (c *Client) Stats() Stats {
 	s := &c.stats
 	return Stats{
-		LocationIQEnabled: c.LocationIQKey != "",
-		CacheHits:         s.cacheHits.Load(),
-		LocationIQOK:      s.liqOK.Load(),
-		LocationIQLimited: s.liqLimited.Load(),
-		LocationIQErrors:  s.liqErrors.Load(),
-		PhotonOK:          s.photonOK.Load(),
-		PhotonErrors:      s.photonErrors.Load(),
-		NominatimOK:       s.nominatimOK.Load(),
-		NominatimErrors:   s.nominatimErrors.Load(),
+		GeoapifyEnabled: c.Key != "",
+		CacheHits:       s.cacheHits.Load(),
+		AutocompleteOK:  s.autocompleteOK.Load(),
+		SearchOK:        s.searchOK.Load(),
+		ReverseOK:       s.reverseOK.Load(),
+		RateLimited:     s.rateLimited.Load(),
+		Errors:          s.errors.Load(),
+		TileCacheHits:   s.tileCacheHits.Load(),
+		TileFetched:     s.tileFetched.Load(),
+		TileErrors:      s.tileErrors.Load(),
 	}
 }
 
-func count(err error, ok, failed *atomic.Int64) {
-	if err == nil {
-		ok.Add(1)
-	} else {
-		failed.Add(1)
-	}
-}
-
-func (s *counters) locationIQ(err error) {
+func (s *counters) count(endpoint string, err error) {
 	switch {
-	case err == nil:
-		s.liqOK.Add(1)
 	case errors.Is(err, errRateLimited):
-		s.liqLimited.Add(1)
-	default:
-		s.liqErrors.Add(1)
+		s.rateLimited.Add(1)
+	case err != nil:
+		s.errors.Add(1)
+	case endpoint == autocomplete:
+		s.autocompleteOK.Add(1)
+	case endpoint == search:
+		s.searchOK.Add(1)
+	case endpoint == reverse:
+		s.reverseOK.Add(1)
 	}
 }

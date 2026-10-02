@@ -112,7 +112,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	if version >= schemaVersion {
-		_, err := db.Exec(schema + adminSchema)
+		_, err := db.Exec(schema + adminSchema + regionSchema)
 		return err
 	}
 	var steps string
@@ -137,7 +137,7 @@ func migrate(db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.Exec(steps + adminSchema); err != nil {
+	if _, err := tx.Exec(steps + adminSchema + regionSchema); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(fmt.Sprintf(`PRAGMA user_version = %d`, schemaVersion)); err != nil {

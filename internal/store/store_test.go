@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"testing"
 )
@@ -206,5 +207,40 @@ func TestMigrateV2AddsTrendColumns(t *testing.T) {
 				t.Errorf("new row trend = %+v", r.Trend)
 			}
 		}
+	}
+}
+
+func TestRegions(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "r.db"), 20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	ctx := context.Background()
+	r := Region{TileX: 116, TileY: 77, Lat: -35.5, Lon: 146.2, Climate: "midlat"}
+	for _, now := range []int64{2000, 1000, 3000} {
+		if err := st.TouchRegion(ctx, r, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.Regions(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].FirstSeen != 2000 || got[0].LastActive != 3000 || got[0].Climate != "midlat" {
+		t.Fatalf("regions = %+v", got)
+	}
+
+	for _, ti := range []int64{1200, 600, 1800} {
+		if err := st.RecordFrameOnly(ctx, ti, fmt.Sprint("/p", ti), 1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	frames, err := st.FrameList(ctx, 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(frames) != 2 || frames[0].Time != 1200 || frames[1].Path != "/p1800" {
+		t.Fatalf("frames = %+v", frames)
 	}
 }

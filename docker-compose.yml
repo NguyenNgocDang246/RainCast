@@ -1,5 +1,5 @@
 # Deploy everything on one server:
-#   cp .env.example .env   # fill in LOCATIONIQ_KEY, SITE_ADDRESS, ADMIN_*
+#   cp .env.example .env   # fill in GEOAPIFY_KEY, SITE_ADDRESS, ADMIN_*
 #   docker compose up -d --build
 # Only Caddy is reachable from outside (ports 80/443).
 services:
@@ -7,6 +7,21 @@ services:
     build: .
     restart: unless-stopped
     env_file: .env
+    volumes:
+      - raincast-data:/app/data
+
+  # Collects radar data for backtesting, apart from the web app. Off by
+  # default: docker compose --profile collect up -d. Score the data with
+  #   docker compose run --rm --entrypoint backtest api   (writes the admin page's report)
+  collect:
+    build: .
+    profiles: [collect]
+    restart: unless-stopped
+    entrypoint: ["collect"]
+    # A second fence behind the built-in guard (-max-cpu, -max-memory-mb…),
+    # so a laptop stays usable while collecting.
+    cpus: "2"
+    mem_limit: 2g
     volumes:
       - raincast-data:/app/data
 

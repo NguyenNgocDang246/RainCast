@@ -16,6 +16,7 @@ export function Intro() {
         <Example label={t.intro.address} value={t.intro.addressExample} />
         <Example label={t.intro.mapsLink} value={t.intro.mapsLinkExample} />
         <Example label={t.intro.coords} value="10.85, 106.77" />
+        <Example label={t.intro.map} value={t.intro.mapExample} />
       </ul>
     </section>
   );

@@ -7,6 +7,8 @@ import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
 
 type Props = {
   onSelect: (place: Place) => void;
+  /** The chosen place, however it was chosen (here or on the map); its name fills the input. */
+  value: Place | null;
   /** Suggestions near this point rank first (usually the current place). */
   near: Place | null;
 };
@@ -24,10 +26,15 @@ type Results = { query: string; places: Place[] };
 /** A dropdown row: a search match, or a place picked before. */
 type Item = { kind: "place" | "recent"; place: Place };
 
-export function LocationSearch({ onSelect, near }: Props) {
+const placeKey = (p: Place | null) => (p ? `${p.lat},${p.lon},${p.name}` : "");
+
+export function LocationSearch({ onSelect, value, near }: Props) {
   const { t } = useLocale();
   const listId = useId();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(value?.name ?? "");
+  // True while the input shows the chosen place rather than the user's typing.
+  const [pristine, setPristine] = useState(true);
+  const [shownKey, setShownKey] = useState(placeKey(value));
   const [results, setResults] = useState<Results | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -39,17 +46,28 @@ export function LocationSearch({ onSelect, near }: Props) {
     typeof window === "undefined" ? [] : loadRecent(),
   );
 
+  // A place chosen elsewhere (the map) replaces the input's text.
+  const key = placeKey(value);
+  if (key !== shownKey) {
+    setShownKey(key);
+    setQuery(value?.name ?? "");
+    setPristine(true);
+    setResults(null);
+    setError(null);
+  }
+
   const q = query.trim();
+  const editing = !pristine && q !== "";
   const places = results && results.query === q ? results.places : [];
-  // Empty input shows recent searches; typing shows matches.
-  const items: Item[] = q
+  // Typing shows matches; otherwise recent searches.
+  const items: Item[] = editing
     ? places.map((place) => ({ kind: "place", place }))
     : recent.map((place) => ({ kind: "recent", place }));
   const showList = open && items.length > 0;
 
   // Suggest while typing, debounced; a newer keystroke aborts the older request.
   useEffect(() => {
-    if (q.length < MIN_CHARS || isLinkOrCoords(q)) return;
+    if (!editing || q.length < MIN_CHARS || isLinkOrCoords(q)) return;
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
       try {
@@ -64,12 +82,14 @@ export function LocationSearch({ onSelect, near }: Props) {
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [q, near]);
+  }, [editing, q, near]);
 
   const choose = (p: Place) => {
     setRecent(addRecent(p));
     setResults(null);
-    setQuery("");
+    // Shown at once, even when re-choosing the same place.
+    setQuery(p.name);
+    setPristine(true);
     setOpen(false);
     setError(null);
     onSelect(p);
@@ -106,7 +126,7 @@ export function LocationSearch({ onSelect, near }: Props) {
   const submit = (e?: React.SubmitEvent<HTMLFormElement>) => {
     e?.preventDefault();
     if (showList && active >= 0) return pick(items[active]);
-    search(q);
+    if (editing) search(q);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -121,6 +141,10 @@ export function LocationSearch({ onSelect, near }: Props) {
     } else if (e.key === "Escape") {
       setOpen(false);
       setActive(-1);
+      // Drop the draft and show the chosen place again.
+      setQuery(value?.name ?? "");
+      setPristine(true);
+      setError(null);
     }
   };
 
@@ -132,11 +156,18 @@ export function LocationSearch({ onSelect, near }: Props) {
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            setPristine(false);
             setOpen(true);
             setActive(-1);
             setError(null);
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={(e) => {
+            setOpen(true);
+            // The map may have added a recent place meanwhile.
+            setRecent(loadRecent());
+            // Typing replaces the shown place.
+            if (pristine) e.target.select();
+          }}
           // The input keeps focus after a pick, so focus alone won't reopen.
           onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
@@ -153,7 +184,7 @@ export function LocationSearch({ onSelect, near }: Props) {
         />
         <button
           type="submit"
-          disabled={busy || !q}
+          disabled={busy || !editing}
           className="rounded-xl bg-sky-500 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
         >
           {busy ? t.search.busy : t.search.submit}
@@ -164,7 +195,7 @@ export function LocationSearch({ onSelect, near }: Props) {
 
       {showList && (
         <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
-          {!q && (
+          {!editing && (
             <div className="flex items-center justify-between px-4 pt-3 pb-1 text-xs text-slate-500">
               <span>{t.search.recent}</span>
               <button

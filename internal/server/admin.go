@@ -2,15 +2,13 @@ package server
 
 import (
 	"bytes"
-	"context"
-	"encoding/json"
 	"errors"
 	"image/png"
 	"net/http"
-	"os"
 	"strconv"
 	"time"
 
+	"raincast/internal/backtest"
 	"raincast/internal/geocode"
 	"raincast/internal/pipeline"
 	"raincast/internal/store"
@@ -28,51 +26,27 @@ func (s *Server) routeAdmin(mux *http.ServeMux) {
 	h("GET /api/admin/lookups", s.adminLookups)
 	h("GET /api/admin/forecast", s.adminForecast)
 	h("GET /api/admin/radar.png", s.radarPNG)
-	h("GET /api/admin/backtest", s.backtestLatest)
-	h("POST /api/admin/backtest", s.backtestRun)
+	h("GET /api/admin/backtest", s.backtestStatus)
 }
 
-// backtestLatest serves the last saved report, or null before any run.
-func (s *Server) backtestLatest(w http.ResponseWriter, r *http.Request) {
-	data, err := os.ReadFile(s.btFile)
-	switch {
-	case s.btFile == "" || errors.Is(err, os.ErrNotExist):
-		writeJSON(w, http.StatusOK, nil)
-	case err != nil:
-		s.fail(w, err)
-	default:
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(data)
-	}
+// BacktestResponse is the body of GET /api/admin/backtest.
+type BacktestResponse struct {
+	Report *backtest.Report `json:"report"` // null before cmd/backtest has run
 }
 
-// backtestRun re-scores stored frames now. Runs are serialized and outlive
-// the request, so leaving the page does not waste a half-finished run.
-func (s *Server) backtestRun(w http.ResponseWriter, r *http.Request) {
-	if s.backtest == nil {
-		writeError(w, http.StatusNotImplemented, "backtest is not configured")
-		return
-	}
-	if !s.btRunning.TryLock() {
-		writeError(w, http.StatusConflict, "a backtest is already running")
-		return
-	}
-	defer s.btRunning.Unlock()
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 10*time.Minute)
-	defer cancel()
-	rep, err := s.backtest(ctx)
-	if err != nil {
-		s.fail(w, err)
-		return
-	}
-	if s.btFile != "" {
-		if js, err := json.MarshalIndent(rep, "", "  "); err == nil {
-			if err := os.WriteFile(s.btFile, js, 0o644); err != nil {
-				s.log.Warn("save backtest", "err", err)
-			}
+// backtestStatus serves the report cmd/backtest last wrote. Backtests run
+// only from that command, never on request.
+func (s *Server) backtestStatus(w http.ResponseWriter, r *http.Request) {
+	var resp BacktestResponse
+	if s.backtest != nil {
+		rep, err := s.backtest()
+		if err != nil {
+			s.fail(w, err)
+			return
 		}
+		resp.Report = rep
 	}
-	writeJSON(w, http.StatusOK, rep)
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // Overview is the body of GET /api/admin/overview.
@@ -89,9 +63,10 @@ func (s *Server) adminOverview(w http.ResponseWriter, r *http.Request) {
 		s.fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, Overview{
+	ov := Overview{
 		ServerTime: time.Now().UTC(), Pipeline: s.src.Status(), Counts: c, Geocoding: s.geo.Stats(),
-	})
+	}
+	writeJSON(w, http.StatusOK, ov)
 }
 
 // AccuracyResponse is the body of GET /api/admin/accuracy.
@@ -186,17 +161,13 @@ func (s *Server) radarPNG(w http.ResponseWriter, r *http.Request) {
 	w.Write(buf.Bytes())
 }
 
-// snapshotFor resolves the home snapshot or an on-demand one from lat/lon,
-// writing the error response itself when it fails.
+// snapshotFor forecasts the lat/lon of the request, writing the error
+// response itself when it fails. There is no default location.
 func (s *Server) snapshotFor(w http.ResponseWriter, r *http.Request) (*pipeline.Snapshot, bool) {
 	q := r.URL.Query()
-	if q.Get("lat") == "" && q.Get("lon") == "" {
-		snap := s.src.Latest()
-		if snap == nil {
-			writeError(w, http.StatusServiceUnavailable, "no forecast yet; waiting for radar frames")
-			return nil, false
-		}
-		return snap, true
+	if q.Get("lat") == "" || q.Get("lon") == "" {
+		writeError(w, http.StatusBadRequest, "lat and lon are required")
+		return nil, false
 	}
 	lat, lon, err := parseLatLon(q.Get("lat"), q.Get("lon"))
 	if err != nil {

@@ -37,7 +37,7 @@ func TestAdminEndpoints(t *testing.T) {
 	h, _ := adminServer(t)
 	rec := get(h, "/api/admin/overview")
 	var ov Overview
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ov) != nil || ov.Pipeline.Ticks != 3 || ov.Geocoding.PhotonOK != 7 {
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ov) != nil || ov.Pipeline.Ticks != 3 || ov.Geocoding.SearchOK != 7 {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	for _, path := range []string{"/api/admin/accuracy", "/api/admin/issues", "/api/admin/frames", "/api/admin/lookups"} {
@@ -69,22 +69,19 @@ func TestBacktestEndpoints(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
-	file := filepath.Join(t.TempDir(), "bt.json")
 	h := New(&fakeSource{}, fakeGeo{}, st, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
-		HorizonMin: 60, BacktestFile: file,
-		Backtest: func(context.Context) (backtest.Report, error) { return backtest.Report{Issues: 7}, nil },
+		HorizonMin: 60,
+		Backtest:   func() (*backtest.Report, error) { return &backtest.Report{Issues: 7}, nil },
 	})
-
-	if rec := get(h, "/api/admin/backtest"); rec.Code != http.StatusOK || strings.TrimSpace(rec.Body.String()) != "null" {
-		t.Fatalf("before run: %d %s", rec.Code, rec.Body)
+	rec := get(h, "/api/admin/backtest")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"issues":7`) ||
+		!strings.Contains(rec.Body.String(), `"report":{`) {
+		t.Fatalf("status: %d %s", rec.Code, rec.Body)
 	}
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/admin/backtest", nil))
-	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"issues":7`) {
-		t.Fatalf("run: %d %s", rec.Code, rec.Body)
-	}
-	// The saved report is served afterwards.
-	if rec := get(h, "/api/admin/backtest"); !strings.Contains(rec.Body.String(), `"issues": 7`) {
-		t.Fatalf("after run: %s", rec.Body)
+	// Runs are background-only: nothing starts one on request.
+	post := httptest.NewRecorder()
+	h.ServeHTTP(post, httptest.NewRequest(http.MethodPost, "/api/admin/backtest", nil))
+	if post.Code == http.StatusOK {
+		t.Fatalf("POST still runs a backtest: %d", post.Code)
 	}
 }

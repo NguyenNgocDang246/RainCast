@@ -10,7 +10,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -26,6 +29,17 @@ const (
 	// scheme (always Universal Blue); smoothing and snow are off so pixel
 	// colors match the palette exactly.
 	tileSuffix = "/2/0_0.png"
+
+	// RateLimit is RainViewer's cap: 100 requests per IP per minute. The
+	// client stays 10% under it.
+	RateLimit = 90
+	// CollectRateLimit caps background collection (every radar region,
+	// stations included) so interactive requests always have headroom.
+	CollectRateLimit = 55
+
+	// coverageDir holds radar coverage tiles. They are not frame data, so
+	// PruneCache leaves them alone.
+	coverageDir = "coverage"
 )
 
 // Frame is one radar image set.
@@ -52,18 +66,96 @@ type Client struct {
 	Retries  int
 	Backoff  time.Duration
 	Parallel int
+	// Limiter paces every network request; CollectLimiter additionally
+	// paces requests whose context is marked with Collecting. Nil disables.
+	Limiter        Waiter
+	CollectLimiter Waiter
+
+	waiting atomic.Int64
+	limit   int // requests per minute, for Stats; RateLimit when 0
+	mu      sync.Mutex
+	recent  []time.Time // network requests in the last minute
 }
 
 // New returns a client that caches tiles under cacheDir.
 func New(cacheDir string) *Client {
 	return &Client{
-		HTTP:     &http.Client{Timeout: 20 * time.Second},
-		MapsURL:  DefaultMapsURL,
-		CacheDir: cacheDir,
-		Retries:  3,
-		Backoff:  500 * time.Millisecond,
-		Parallel: 4,
+		HTTP:           &http.Client{Timeout: 20 * time.Second},
+		MapsURL:        DefaultMapsURL,
+		CacheDir:       cacheDir,
+		Retries:        3,
+		Backoff:        500 * time.Millisecond,
+		Parallel:       8,
+		Limiter:        NewWindow(RateLimit, time.Minute),
+		CollectLimiter: NewWindow(CollectRateLimit, time.Minute),
 	}
+}
+
+// SetRateLimit caps this client at perMinute requests. RainViewer's limit
+// is per IP, so processes sharing a machine must split it between them;
+// the collection sub-limit is dropped, since the whole client now has one
+// purpose.
+func (c *Client) SetRateLimit(perMinute int) {
+	c.Limiter = NewWindow(perMinute, time.Minute)
+	c.CollectLimiter = nil
+	c.limit = perMinute
+}
+
+type collectingKey struct{}
+
+// Collecting marks ctx as background collection, paced by CollectLimiter
+// on top of the global limit.
+func Collecting(ctx context.Context) context.Context {
+	return context.WithValue(ctx, collectingKey{}, true)
+}
+
+// RateStats describes recent network use.
+type RateStats struct {
+	LastMinute int `json:"last_minute"` // requests sent in the last 60 s
+	Waiting    int `json:"waiting"`     // requests queued for the limiter
+	Limit      int `json:"limit"`
+}
+
+// Stats reports recent network use.
+func (c *Client) Stats() RateStats {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.trimLocked(time.Now())
+	limit := c.limit
+	if limit == 0 {
+		limit = RateLimit
+	}
+	return RateStats{LastMinute: len(c.recent), Waiting: int(c.waiting.Load()), Limit: limit}
+}
+
+func (c *Client) trimLocked(now time.Time) {
+	cut := 0
+	for cut < len(c.recent) && now.Sub(c.recent[cut]) >= time.Minute {
+		cut++
+	}
+	c.recent = c.recent[cut:]
+}
+
+// wait blocks until the limiters allow one more request.
+func (c *Client) wait(ctx context.Context) error {
+	c.waiting.Add(1)
+	defer c.waiting.Add(-1)
+	if ctx.Value(collectingKey{}) != nil && c.CollectLimiter != nil {
+		if err := c.CollectLimiter.Wait(ctx); err != nil {
+			return err
+		}
+	}
+	if c.Limiter != nil {
+		if err := c.Limiter.Wait(ctx); err != nil {
+			return err
+		}
+	}
+	now := time.Now()
+	c.mu.Lock()
+	c.trimLocked(now)
+	c.recent = append(c.recent, now)
+	c.mu.Unlock()
+	return nil
 }
 
 // FetchMaps returns the current frame index.
@@ -114,6 +206,26 @@ func (c *Client) FetchTile(ctx context.Context, host, path string, t Tile) ([]by
 	return data, nil
 }
 
+// CachedTile reads a tile from the disk cache only.
+func (c *Client) CachedTile(path string, t Tile) ([]byte, bool) {
+	p := c.cachePath(path, t)
+	if p == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(p)
+	return data, err == nil
+}
+
+// CachedCoverage reads a coverage tile from the disk cache only.
+func (c *Client) CachedCoverage(t Tile) ([]byte, bool) {
+	p := c.CoveragePath(t)
+	if p == "" {
+		return nil, false
+	}
+	data, err := os.ReadFile(p)
+	return data, err == nil
+}
+
 // FetchTiles downloads tiles concurrently, at most c.Parallel at a time.
 func (c *Client) FetchTiles(ctx context.Context, host, path string, tiles []Tile) (map[Tile][]byte, error) {
 	out := make([][]byte, len(tiles))
@@ -136,6 +248,43 @@ func (c *Client) FetchTiles(ctx context.Context, host, path string, tiles []Tile
 	return m, nil
 }
 
+// CoverageURL is the tile showing where RainViewer has radar: transparent
+// pixels are covered, opaque black ones are not.
+func CoverageURL(host string, t Tile) string {
+	return fmt.Sprintf("%s/v2/coverage/0/256/%d/%d/%d/0/0_0.png", host, t.Z, t.X, t.Y)
+}
+
+// FetchCoverage returns a coverage tile, from the disk cache when it is
+// younger than maxAge. Coverage changes only when radars come and go.
+func (c *Client) FetchCoverage(ctx context.Context, host string, t Tile, maxAge time.Duration) ([]byte, error) {
+	cached := c.CoveragePath(t)
+	if cached != "" {
+		if info, err := os.Stat(cached); err == nil && time.Since(info.ModTime()) < maxAge {
+			if data, err := os.ReadFile(cached); err == nil {
+				return data, nil
+			}
+		}
+	}
+	data, err := c.get(ctx, CoverageURL(host, t))
+	if err != nil {
+		return nil, fmt.Errorf("rainviewer: coverage %d/%d/%d: %w", t.Z, t.X, t.Y, err)
+	}
+	if cached != "" {
+		if err := writeAtomic(cached, data); err != nil {
+			return nil, err
+		}
+	}
+	return data, nil
+}
+
+// CoveragePath is where a coverage tile is cached, or "" without a cache.
+func (c *Client) CoveragePath(t Tile) string {
+	if c.CacheDir == "" {
+		return ""
+	}
+	return filepath.Join(c.CacheDir, coverageDir, fmt.Sprintf("%d_%d_%d.png", t.Z, t.X, t.Y))
+}
+
 // PruneCache removes cached frames older than maxAge.
 func (c *Client) PruneCache(maxAge time.Duration) error {
 	if c.CacheDir == "" {
@@ -151,7 +300,7 @@ func (c *Client) PruneCache(maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge)
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil || !e.IsDir() || info.ModTime().After(cutoff) {
+		if err != nil || !e.IsDir() || e.Name() == coverageDir || info.ModTime().After(cutoff) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(c.CacheDir, e.Name())); err != nil {
@@ -192,16 +341,30 @@ func writeAtomic(path string, data []byte) error {
 // errPermanent marks responses that retrying cannot fix.
 type errPermanent struct{ error }
 
+// errRetryAfter is a 429 or 503 that says how long to wait.
+type errRetryAfter struct {
+	error
+	after time.Duration
+}
+
 // get fetches url, retrying network errors, 429 and 5xx with exponential backoff.
 func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
 	for attempt := 0; attempt <= c.Retries; attempt++ {
 		if attempt > 0 {
+			delay := c.Backoff << (attempt - 1)
+			var ra errRetryAfter
+			if errors.As(lastErr, &ra) {
+				delay = max(delay, ra.after)
+			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(c.Backoff << (attempt - 1)):
+			case <-time.After(delay):
 			}
+		}
+		if err := c.wait(ctx); err != nil {
+			return nil, err
 		}
 		data, err := c.getOnce(ctx, url)
 		if err == nil {
@@ -235,7 +398,11 @@ func (c *Client) getOnce(ctx context.Context, url string) ([]byte, error) {
 	case resp.StatusCode == http.StatusOK:
 		return data, nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
-		return nil, fmt.Errorf("http %d", resp.StatusCode)
+		err := fmt.Errorf("http %d", resp.StatusCode)
+		if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 {
+			return nil, errRetryAfter{err, min(time.Duration(secs)*time.Second, 2*time.Minute)}
+		}
+		return nil, err
 	default:
 		return nil, errPermanent{fmt.Errorf("http %d", resp.StatusCode)}
 	}

@@ -47,6 +47,11 @@ export function geocode(query: string): Promise<Place[]> {
   return getJSON<Place[]>(`/api/geocode?q=${encodeURIComponent(query)}`);
 }
 
+/** Names a point picked on the map; the point itself is kept. */
+export function reverse(lat: number, lon: number, signal?: AbortSignal): Promise<Place> {
+  return getJSON<Place>(`/api/reverse?lat=${lat}&lon=${lon}`, signal);
+}
+
 /** Places matching a partial query, nearest to `near` first. */
 export function suggest(query: string, near: Pick<Place, "lat" | "lon"> | null, signal: AbortSignal): Promise<Place[]> {
   const bias = near ? `&lat=${near.lat}&lon=${near.lon}` : "";

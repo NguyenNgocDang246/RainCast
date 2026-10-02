@@ -6,11 +6,11 @@ RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 # modernc.org/sqlite is pure Go, so no cgo is needed.
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /raincast ./cmd/raincast
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/ ./cmd/raincast ./cmd/collect ./cmd/backtest
 
 FROM gcr.io/distroless/static-debian12
 WORKDIR /app
-COPY --from=build /raincast /usr/local/bin/raincast
+COPY --from=build /out/ /usr/local/bin/
 # SQLite database, tile cache and backtest.json live here (a volume).
 VOLUME /app/data
 EXPOSE 8080

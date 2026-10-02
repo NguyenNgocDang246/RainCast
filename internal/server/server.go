@@ -9,7 +9,7 @@ import (
 	"math"
 	"net/http"
 	"strconv"
-	"sync"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -21,15 +21,18 @@ import (
 
 // Source provides forecasts: the polled home location and on demand.
 type Source interface {
-	Latest() *pipeline.Snapshot
+	Ready() bool
 	ForecastAt(ctx context.Context, lat, lon float64) (*pipeline.Snapshot, error)
 	Status() pipeline.Status
 }
 
-// Geocoder turns an address, coordinates or a map link into places.
+// Geocoder turns an address, coordinates or a map link into places, names
+// points picked on the map and serves the map's tiles.
 type Geocoder interface {
 	Resolve(ctx context.Context, input string) ([]geocode.Place, error)
 	Suggest(ctx context.Context, q string, bias *geocode.LatLon) ([]geocode.Place, error)
+	Reverse(ctx context.Context, lat, lon float64) (geocode.Place, error)
+	Tile(ctx context.Context, z, x, y int) ([]byte, error)
 	Stats() geocode.Stats
 }
 
@@ -37,10 +40,9 @@ type Geocoder interface {
 type Config struct {
 	CORSOrigin string // empty disables CORS
 	HorizonMin int
-	// Backtest re-scores stored frames; nil disables the admin backtest.
-	Backtest func(ctx context.Context) (backtest.Report, error)
-	// BacktestFile keeps the latest backtest report between restarts.
-	BacktestFile string
+	// Backtest reads the report cmd/backtest last wrote (nil when none);
+	// nil serves no report.
+	Backtest func() (*backtest.Report, error)
 }
 
 // Server holds the handler dependencies.
@@ -50,9 +52,7 @@ type Server struct {
 	store      *store.Store
 	log        *slog.Logger
 	corsOrigin string
-	backtest   func(ctx context.Context) (backtest.Report, error)
-	btFile     string
-	btRunning  sync.Mutex
+	backtest   func() (*backtest.Report, error)
 	stepMin    int
 	horizonMin int
 }
@@ -61,7 +61,7 @@ type Server struct {
 func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config) http.Handler {
 	s := &Server{
 		src: src, geo: geo, store: st, log: log,
-		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest, btFile: cfg.BacktestFile,
+		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest,
 		stepMin: 10, horizonMin: cfg.HorizonMin,
 	}
 	mux := http.NewServeMux()
@@ -69,22 +69,24 @@ func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config
 	mux.HandleFunc("GET /api/forecast", s.forecast)
 	mux.HandleFunc("GET /api/geocode", s.geocode)
 	mux.HandleFunc("GET /api/suggest", s.suggest)
+	mux.HandleFunc("GET /api/reverse", s.reverse)
+	mux.HandleFunc("GET /api/tiles/{z}/{x}/{y}", s.tile)
 	s.routeAdmin(mux)
 	return s.logging(s.cors(mux))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": s.src.Latest() != nil})
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": s.src.Ready()})
 }
 
-// forecast serves the home snapshot, or an on-demand forecast when lat and
-// lon are given. On-demand forecasts are logged for the admin page.
+// forecast serves a forecast for the lat and lon given, which are required.
+// Forecasts are logged for the admin page.
 func (s *Server) forecast(w http.ResponseWriter, r *http.Request) {
 	snap, ok := s.snapshotFor(w, r)
 	if !ok {
 		return
 	}
-	if r.URL.Query().Get("lat") != "" && s.store != nil {
+	if s.store != nil {
 		err := s.store.RecordLookup(r.Context(), store.Lookup{
 			At: time.Now(), Lat: snap.Location.Lat, Lon: snap.Location.Lon, FrameTime: snap.FrameTime,
 			RainingNow: snap.RainingNow, ArrivalMin: snap.ArrivalMin,
@@ -154,6 +156,49 @@ func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
 		places = []geocode.Place{}
 	}
 	writeJSON(w, http.StatusOK, places)
+}
+
+// reverse names a point picked on the map. A failed lookup still answers
+// with the point, named by its coordinates.
+func (s *Server) reverse(w http.ResponseWriter, r *http.Request) {
+	lat, lon, err := parseLatLon(r.URL.Query().Get("lat"), r.URL.Query().Get("lon"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	p, err := s.geo.Reverse(r.Context(), lat, lon)
+	if err != nil && r.Context().Err() == nil && !errors.Is(err, geocode.ErrNoKey) {
+		s.log.Warn("reverse", "err", err)
+	}
+	writeJSON(w, http.StatusOK, p)
+}
+
+// tile proxies a map tile so the Geoapify key stays on the server.
+func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
+	z, err1 := strconv.Atoi(r.PathValue("z"))
+	x, err2 := strconv.Atoi(r.PathValue("x"))
+	y, err3 := strconv.Atoi(strings.TrimSuffix(r.PathValue("y"), ".png"))
+	if err1 != nil || err2 != nil || err3 != nil {
+		writeError(w, http.StatusBadRequest, "bad tile")
+		return
+	}
+	b, err := s.geo.Tile(r.Context(), z, x, y)
+	switch {
+	case errors.Is(err, geocode.ErrBadTile):
+		writeError(w, http.StatusBadRequest, "bad tile")
+	case errors.Is(err, geocode.ErrNoKey):
+		// Logged once at startup.
+		writeError(w, http.StatusServiceUnavailable, "map tiles are not configured")
+	case err != nil:
+		if r.Context().Err() == nil {
+			s.log.Warn("tile", "err", err)
+		}
+		writeError(w, http.StatusBadGateway, "map tile unavailable")
+	default:
+		w.Header().Set("Content-Type", "image/png")
+		w.Header().Set("Cache-Control", "public, max-age=2592000")
+		w.Write(b)
+	}
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {

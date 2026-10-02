@@ -103,3 +103,29 @@ func TestTrendGrowsLightRainIntoHeavy(t *testing.T) {
 		t.Fatalf("trend did not saturate: %v", r.At(60))
 	}
 }
+
+func TestProbability(t *testing.T) {
+	g := radar.NewGrid(100, 100)
+	for y := range 100 {
+		for x := 50; x < 100; x++ {
+			g.Set(x, y, 35) // rain on the east half
+		}
+	}
+	opt := Options{Horizon: 30, Threshold: 20, Radius: 1, ProbRadius: func(int) int { return 4 }}
+	r := Forecast(g, nil, 50, 50, opt)
+	if p := r.ProbAt(0); p < 0.4 || p > 0.65 {
+		t.Errorf("on the edge: prob %.2f, want about half", p)
+	}
+	if p := Forecast(g, nil, 80, 50, opt).ProbAt(10); p != 1 {
+		t.Errorf("inside the rain: prob %.2f, want 1", p)
+	}
+	if p := Forecast(g, nil, 10, 50, opt).ProbAt(10); p != 0 {
+		t.Errorf("far from rain: prob %.2f, want 0", p)
+	}
+	if p := Forecast(g, nil, 50, 50, Options{Horizon: 5, Threshold: 20, Radius: 1}).ProbAt(0); p != 0 {
+		t.Errorf("without ProbRadius prob = %.2f, want 0", p)
+	}
+	if DefaultProbRadius(0) != 2 || DefaultProbRadius(60) != 10 {
+		t.Error("DefaultProbRadius should go from 2 to 10 px over an hour")
+	}
+}
