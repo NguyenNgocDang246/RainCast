@@ -1,4 +1,5 @@
-package main
+// Package dotenv loads KEY=VALUE files into the environment.
+package dotenv
 
 import (
 	"bufio"
@@ -8,9 +9,9 @@ import (
 	"strings"
 )
 
-// loadDotEnv sets variables from a KEY=VALUE file without overriding ones
+// Load sets variables from a KEY=VALUE file without overriding ones
 // already in the environment. A missing file is not an error.
-func loadDotEnv(path string) error {
+func Load(path string) error {
 	f, err := os.Open(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil

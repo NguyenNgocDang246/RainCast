@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"raincast/internal/backtest"
+	"raincast/internal/dotenv"
 	"raincast/internal/guard"
 	"raincast/internal/pipeline"
 	"raincast/internal/store"
@@ -27,7 +28,13 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "data/raincast.db", "SQLite database (frame list), shared with raincast and collect")
+	// DATABASE_URL comes from the environment or .env.
+	if err := dotenv.Load(".env"); err != nil {
+		fmt.Fprintln(os.Stderr, "load .env:", err)
+		os.Exit(1)
+	}
+	dbURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL URL of the collected frames, shared with collect (default $DATABASE_URL)")
+	dataDir := flag.String("data", "data", "directory for the saved scores and learned weights")
 	cacheDir := flag.String("cache", "data/tiles", "tile cache directory")
 	step := flag.Int("step", 8, "sample spacing in pixels (~1.2 km each)")
 	fresh := flag.Bool("fresh", false, "score everything again instead of adding to the saved scores")
@@ -44,13 +51,13 @@ func main() {
 	limits := guard.Flags(flag.CommandLine, def)
 	flag.Parse()
 
-	if err := run(*dbPath, *cacheDir, *out, *cpuProfile, *fresh, *step, *days, *parallel, *workers, limits()); err != nil {
+	if err := run(*dbURL, *dataDir, *cacheDir, *out, *cpuProfile, *fresh, *step, *days, *parallel, *workers, limits()); err != nil {
 		fmt.Fprintln(os.Stderr, "backtest:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dbPath, cacheDir, out, cpuProfile string, fresh bool, step, days, parallel, workers int, lim guard.Limits) error {
+func run(dbURL, dataDir, cacheDir, out, cpuProfile string, fresh bool, step, days, parallel, workers int, lim guard.Limits) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
@@ -63,22 +70,22 @@ func run(dbPath, cacheDir, out, cpuProfile string, fresh bool, step, days, paral
 
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	lim.DiskPath, lim.DirPath = filepath.Dir(dbPath), cacheDir
+	lim.DiskPath, lim.DirPath = dataDir, cacheDir
 	ctx, _ := guard.Start(sigCtx, lim, log)
 	lim.Log(log)
 
-	st, err := store.Open(dbPath, 20)
+	st, err := store.Open(dbURL)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
 
 	o := backtest.Options{Step: step, Parallel: parallel, Workers: workers, Keep: pipeline.DefaultConfig().CacheAge,
-		WeightsFile: filepath.Join(filepath.Dir(dbPath), "backtest_weights.gob")}
+		WeightsFile: filepath.Join(dataDir, "backtest_weights.gob")}
 	if fresh {
 		o.Days = days
 	} else {
-		o.StateFile = filepath.Join(filepath.Dir(dbPath), "backtest_state.gob")
+		o.StateFile = filepath.Join(dataDir, "backtest_state.gob")
 	}
 	rep, err := backtest.RunStored(ctx, st, cacheDir, o)
 	if v := guard.Stopped(ctx, log); v != nil {

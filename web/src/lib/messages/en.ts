@@ -92,9 +92,7 @@ export const en: Dict = {
   admin: {
     tabs: {
       overview: "Overview",
-      accuracy: "Accuracy",
-      issues: "Forecast history",
-      lookups: "Lookups",
+      backtest: "Backtest",
       frames: "Radar frames",
       tools: "Tools",
     },
@@ -125,13 +123,10 @@ export const en: Dict = {
       stations: (n, names, since) => `Default location: ${names.split(", ")[0]} · ${n} preset places · running since ${since}`,
       lastError: "Last poll error:",
 
-      stored: "Stored data",
+      stored: "Collected data (cmd/collect)",
       frames: "Radar frames",
-      atStations: (n) => `measured at ${n} stations`,
-      issues: "Forecasts (tracked points)",
-      forecasts: "Per-lead predictions",
-      verified: "Verified",
-      lookups: "User lookups",
+      regions: "Regions tracked",
+      noDatabase: "No database connected (DATABASE_URL)",
 
       geocoding: (on) => `Geoapify (since start) · ${on ? "key set" : "no key"}`,
       cacheHits: "Served from cache",
@@ -140,44 +135,6 @@ export const en: Dict = {
       tiles: "Map tiles fetched",
       tilesSub: (cached, errors) => `${cached} from cache · ${errors} errors`,
 
-    },
-
-    accuracy: {
-      series: {
-        model: "Model",
-        persistence: "Persistence (baseline)",
-        trend: "Model + trend",
-      },
-      metrics: {
-        csi: "CSI",
-        accuracy: "Accuracy",
-        pod: "Rain caught",
-        far: "False alarms",
-      },
-      csiModel: "CSI · model",
-      csiTrend: "CSI · model + trend",
-      csiBaseline: "CSI · baseline",
-      accuracyPct: (p) => `accuracy ${p}`,
-      noData: "no data yet",
-      arrivalError: "Arrival time error",
-      noArrivals: "no rain arrivals yet",
-      arrivalBias: (n, late, mins) => `${n} cases · rain came ${mins} min ${late ? "later" : "earlier"} than forecast`,
-      byLeadShadow: (n) => `By lead time · ${n} predictions with both versions`,
-      byLead: (n) => `By lead time · ${n} predictions`,
-      nothingYet: "No forecast is old enough to verify yet.",
-      chartNote: (n) =>
-        `Real data from ${n} station forecasts, scored when the actual radar frame arrives. “Trend” lets rain grow or weaken following the last 20 minutes; it runs alongside for comparison and is not shown to users yet.`,
-      table: (n) => `Details · all ${n} verified predictions`,
-      lead: "Lead",
-      count: "Count",
-      podFull: "Rain caught (POD)",
-      farFull: "False alarms (FAR)",
-      contingency: "Hits / misses / false / correct no-rain",
-      maeDbz: "dBZ error",
-      tableNote: "Small numbers are the “nothing changes” baseline. CSI = hits / (hits + misses + false alarms), the main score to optimise.",
-      metricGroup: "Metric",
-      chartLabel: "Score by lead time",
-      tooltipCases: (n, c) => `${n} cases · hit/miss/false/correct: ${c}`,
     },
 
     backtest: {
@@ -227,26 +184,10 @@ export const en: Dict = {
     },
 
     history: {
-      issuesTitle: (n) => `Station forecast history (last ${n})`,
-      frame: "Radar frame",
-      station: "Station",
-      then: "At the time",
-      rainIn: "Rain in",
-      heavyIn: "Heavy rain in",
-      predVsObs: (m) => `+${m}′ pred / obs`,
-      issuesNote:
-        "Predicted dBZ / dBZ measured when the real frame arrived (… = not yet due). “hit/miss” compares rain (≥ threshold) with no rain.",
-      framesTitle: (n) => `Recorded radar frames (${n}) · dBZ at each station`,
+      framesTitle: (n) => `Recorded radar frames (latest ${n})`,
       frameTime: "Frame time",
-      recordedAt: "Recorded at",
-      framesNote: "≥ 20 dBZ is rain, ≥ 40 is heavy rain; “–” means no rain or not measured.",
-      lookupsTitle: (n) => `User lookups (last ${n})`,
-      at: "At",
-      place: "Location",
-      result: "Result",
-      motion: "Motion",
-      viewRadar: "View radar",
-      noLookups: "No lookups yet.",
+      path: "Tile path",
+      noFrames: "No frames yet (or no database connected).",
     },
 
     tools: {

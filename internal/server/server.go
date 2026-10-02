@@ -20,10 +20,18 @@ import (
 	"raincast/internal/store"
 )
 
-// Source provides forecasts: the polled home location and on demand.
+// Source provides forecasts on demand.
 type Source interface {
 	Ready() bool
+	// EnsureFresh reloads a stale frame index (serverless hosts have no
+	// background poller).
+	EnsureFresh(ctx context.Context)
 	ForecastAt(ctx context.Context, lat, lon float64) (*pipeline.Snapshot, error)
+	// Plan, Cached and ForecastFromTiles serve forecasts from tiles the
+	// client downloads (Config.ClientTiles).
+	Plan(lat, lon float64) (pipeline.TilePlan, error)
+	Cached(ctx context.Context, lat, lon float64, hash string) (*pipeline.Snapshot, bool)
+	ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte) (*pipeline.Snapshot, error)
 	Status() pipeline.Status
 	Radar() (pipeline.RadarFrame, bool)
 }
@@ -42,26 +50,40 @@ type Geocoder interface {
 // Config holds the server settings.
 type Config struct {
 	CORSOrigin string // empty disables CORS
-	HorizonMin int
+	// Admin serves the admin API (/api/admin/*), which has no login: only
+	// in development.
+	Admin bool
 	// Backtest reads the report cmd/backtest last wrote (nil when none);
 	// nil serves no report.
 	Backtest func() (*backtest.Report, error)
 	// CountryOf names a client IP's country ("vn"), "" when unknown; nil
 	// knows none. Searches favor the user's country.
 	CountryOf func(netip.Addr) string
+	// CountryHeader, when set, is a request header naming the user's
+	// country that the host fills in (Vercel: X-Vercel-IP-Country). It is
+	// used before CountryOf.
+	CountryHeader string
+	// RealIPHeader, when set, is a header the host's proxy sets to the
+	// client IP (Vercel: X-Real-IP), used instead of X-Forwarded-For.
+	RealIPHeader string
+	// ClientTiles makes browsers download the radar tiles of their own
+	// forecasts (see forecast), so the server stays within RainViewer's
+	// per-IP limit on hosts with shared outbound IPs.
+	ClientTiles bool
 }
 
 // Server holds the handler dependencies.
 type Server struct {
-	src        Source
-	geo        Geocoder
-	store      *store.Store
-	log        *slog.Logger
-	corsOrigin string
-	backtest   func() (*backtest.Report, error)
-	countryOf  func(netip.Addr) string
-	stepMin    int
-	horizonMin int
+	src         Source
+	geo         Geocoder
+	store       *store.Store
+	log         *slog.Logger
+	corsOrigin  string
+	backtest    func() (*backtest.Report, error)
+	countryOf   func(netip.Addr) string
+	countryHdr  string
+	realIPHdr   string
+	clientTiles bool
 }
 
 // New returns the HTTP handler.
@@ -69,43 +91,26 @@ func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config
 	s := &Server{
 		src: src, geo: geo, store: st, log: log,
 		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest, countryOf: cfg.CountryOf,
-		stepMin: 10, horizonMin: cfg.HorizonMin,
+		countryHdr: cfg.CountryHeader, realIPHdr: cfg.RealIPHeader, clientTiles: cfg.ClientTiles,
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.health)
 	mux.HandleFunc("GET /api/forecast", s.forecast)
+	mux.HandleFunc("POST /api/forecast", s.forecast)
 	mux.HandleFunc("GET /api/geocode", s.geocode)
 	mux.HandleFunc("GET /api/suggest", s.suggest)
 	mux.HandleFunc("GET /api/reverse", s.reverse)
 	mux.HandleFunc("GET /api/tiles/{z}/{x}/{y}", s.tile)
 	mux.HandleFunc("GET /api/radar", s.radar)
-	s.routeAdmin(mux)
+	if cfg.Admin {
+		s.routeAdmin(mux)
+	}
 	return s.logging(s.cors(mux))
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
+	s.src.EnsureFresh(r.Context())
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": s.src.Ready()})
-}
-
-// forecast serves a forecast for the lat and lon given, which are required.
-// Forecasts are logged for the admin page.
-func (s *Server) forecast(w http.ResponseWriter, r *http.Request) {
-	snap, ok := s.snapshotFor(w, r)
-	if !ok {
-		return
-	}
-	if s.store != nil {
-		err := s.store.RecordLookup(r.Context(), store.Lookup{
-			At: time.Now(), Lat: snap.Location.Lat, Lon: snap.Location.Lon, FrameTime: snap.FrameTime,
-			RainingNow: snap.RainingNow, ArrivalMin: snap.ArrivalMin,
-			HeavyNow: snap.HeavyNow, HeavyArrivalMin: snap.HeavyArrivalMin,
-			SpeedKmh: snap.SpeedKmh, DirectionDeg: snap.DirectionDeg,
-		})
-		if err != nil {
-			s.log.Warn("record lookup", "err", err)
-		}
-	}
-	writeJSON(w, http.StatusOK, snap)
 }
 
 // parseLatLon validates coordinates and rounds them to ~10 m, which is
@@ -168,10 +173,26 @@ func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
 
 // country is the requesting user's country, "" when unknown.
 func (s *Server) country(r *http.Request) string {
+	if s.countryHdr != "" {
+		if c := r.Header.Get(s.countryHdr); len(c) == 2 {
+			return strings.ToLower(c)
+		}
+	}
 	if s.countryOf == nil {
 		return ""
 	}
-	return s.countryOf(clientIP(r))
+	return s.countryOf(s.clientIP(r))
+}
+
+// clientIP is the request's origin, from the host's real-IP header when
+// one is configured.
+func (s *Server) clientIP(r *http.Request) netip.Addr {
+	if s.realIPHdr != "" {
+		if ip, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get(s.realIPHdr))); err == nil {
+			return ip.Unmap()
+		}
+	}
+	return clientIP(r)
 }
 
 // clientIP is the request's origin. Behind the reverse proxy (a private or
@@ -209,6 +230,10 @@ func (s *Server) reverse(w http.ResponseWriter, r *http.Request) {
 	if err != nil && r.Context().Err() == nil && !errors.Is(err, geocode.ErrNoKey) {
 		s.log.Warn("reverse", "err", err)
 	}
+	if err == nil {
+		// The name depends only on the point, so a CDN may keep it.
+		w.Header().Set("Cache-Control", "public, max-age=86400, s-maxage=86400")
+	}
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -235,7 +260,8 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "map tile unavailable")
 	default:
 		w.Header().Set("Content-Type", "image/png")
-		w.Header().Set("Cache-Control", "public, max-age=2592000")
+		// s-maxage lets a CDN (Vercel's) keep tiles for every visitor.
+		w.Header().Set("Cache-Control", "public, max-age=2592000, s-maxage=2592000")
 		w.Write(b)
 	}
 }
@@ -243,12 +269,13 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 // radar names the newest radar frame for the map. Browsers fetch its tiles
 // from RainViewer themselves, so map views don't spend the server's quota.
 func (s *Server) radar(w http.ResponseWriter, r *http.Request) {
+	s.src.EnsureFresh(r.Context())
 	f, ok := s.src.Radar()
 	if !ok {
 		writeError(w, http.StatusServiceUnavailable, "radar data is still loading; try again shortly")
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=60")
+	w.Header().Set("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=60")
 	writeJSON(w, http.StatusOK, f)
 }
 

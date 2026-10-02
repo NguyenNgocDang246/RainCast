@@ -3,18 +3,17 @@
 import { useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { LanguageSwitch } from "../LanguageSwitch";
-import { AccuracyTab } from "./AccuracyTab";
-import { FramesTab, IssuesTab, LookupsTab } from "./HistoryTabs";
+import { BacktestPanel } from "./BacktestPanel";
+import { FramesTab } from "./HistoryTabs";
 import { OverviewTab } from "./OverviewTab";
 import { ToolsTab } from "./ToolsTab";
 
-const TABS = ["overview", "accuracy", "issues", "lookups", "frames", "tools"] as const;
+const TABS = ["overview", "backtest", "frames", "tools"] as const;
 type Tab = (typeof TABS)[number];
 
 export function AdminApp() {
   const { t } = useLocale();
   const [tab, setTab] = useState<Tab>("overview");
-  const [inspect, setInspect] = useState<{ lat: number; lon: number } | null>(null);
 
   return (
     <main className="mx-auto w-full max-w-6xl px-4 py-8">
@@ -39,18 +38,9 @@ export function AdminApp() {
       </nav>
 
       {tab === "overview" && <OverviewTab />}
-      {tab === "accuracy" && <AccuracyTab />}
-      {tab === "issues" && <IssuesTab />}
-      {tab === "lookups" && (
-        <LookupsTab
-          onInspect={(lat, lon) => {
-            setInspect({ lat, lon });
-            setTab("tools");
-          }}
-        />
-      )}
+      {tab === "backtest" && <BacktestPanel />}
       {tab === "frames" && <FramesTab />}
-      {tab === "tools" && <ToolsTab key={inspect ? `${inspect.lat},${inspect.lon}` : "home"} initial={inspect} />}
+      {tab === "tools" && <ToolsTab initial={null} />}
     </main>
   );
 }

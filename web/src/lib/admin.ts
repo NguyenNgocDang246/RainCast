@@ -1,5 +1,3 @@
-import { API_BASE, type Forecast } from "./api";
-
 // Types mirror the Go admin API (internal/server/admin.go, internal/store).
 
 export type Scores = {
@@ -12,27 +10,6 @@ export type Scores = {
   pod: number | null;
   far: number | null;
   csi: number | null;
-};
-
-export type LeadStats = { lead_min: number; model: Scores; persistence: Scores; mae_dbz: number | null };
-
-/** Model with vs without intensity trend, on the forecasts that recorded both. */
-export type Comparison = {
-  leads: { lead_min: number; model: Scores; trend: Scores; persistence: Scores }[];
-  model: Scores;
-  trend: Scores;
-  persistence: Scores;
-};
-
-export type Accuracy = {
-  leads: LeadStats[];
-  model: Scores;
-  persistence: Scores;
-  shadow: Comparison | null;
-  arrival: { n: number; mae_min: number | null; bias_min: number | null };
-  issued: number;
-  verified: number;
-  generated_at: string;
 };
 
 export type Overview = {
@@ -48,7 +25,8 @@ export type Overview = {
     latest_frame: string | null;
     cached_regions: number;
   };
-  counts: { frames: number; stations: number; issues: number; forecasts: number; verified: number; lookups: number };
+  /** null when the API has no database. */
+  counts: { frames: number; regions: number } | null;
   geocoding: {
     geoapify_enabled: boolean;
     cache_hits: number;
@@ -63,42 +41,10 @@ export type Overview = {
   };
 };
 
-export type LeadResult = {
-  lead_min: number;
-  pred_dbz: number;
-  pred_rain: boolean;
-  persist_rain: boolean;
-  obs_dbz: number | null;
-  obs_rain: boolean | null;
-};
-
 export type Station = { id: string; name: string; lat: number; lon: number };
 
-export type Issue = {
-  station: string;
-  issued_at: string;
-  arrival_min: number;
-  raining_now: boolean;
-  result: Forecast;
-  leads: LeadResult[];
-};
-
-/** obs: dBZ observed at each station (by id). */
-export type Frame = { time: string; path: string; obs: Record<string, number>; recorded_at: string };
-
-export type Lookup = {
-  id: number;
-  at: string;
-  lat: number;
-  lon: number;
-  frame_time: string;
-  raining_now: boolean;
-  arrival_min: number;
-  heavy_now: boolean;
-  heavy_arrival_min: number;
-  speed_kmh: number;
-  direction_deg: number;
-};
+/** A frame cmd/collect recorded; time is unix seconds. */
+export type Frame = { time: number; path: string };
 
 export type BacktestResult = {
   /** Vietnamese label; build one from method/pairs/trend/baseline instead. */
@@ -149,7 +95,9 @@ export type BacktestStatus = { report: BacktestReport | null };
 export const MIN_EVENTS = 30;
 
 async function call(path: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(API_BASE + path, { cache: "no-store", ...init });
+  // Same origin: the admin page runs locally, next to the backend, through
+  // the Next rewrite.
+  const res = await fetch(path, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     throw new Error(body?.error ?? `HTTP ${res.status}`);

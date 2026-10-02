@@ -14,27 +14,33 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"raincast/internal/backtest"
+	"raincast/internal/app"
+	"raincast/internal/dotenv"
+	"raincast/internal/env"
 	"raincast/internal/geocode"
-	"raincast/internal/geoip"
 	"raincast/internal/guard"
 	"raincast/internal/model"
 	"raincast/internal/pipeline"
-	"raincast/internal/rainviewer"
 	"raincast/internal/server"
-	"raincast/internal/store"
 )
 
 func main() {
-	// Secrets such as GEOAPIFY_KEY come from the environment or .env.
-	if err := loadDotEnv(".env"); err != nil {
+	// Secrets such as GEOAPIFY_KEY and DATABASE_URL come from the
+	// environment or .env.
+	if err := dotenv.Load(".env"); err != nil {
 		fmt.Fprintln(os.Stderr, "load .env:", err)
 		os.Exit(1)
+	}
+	// Production serves no admin page, needs CORS spelled out and logs
+	// JSON.
+	prod := env.Production(false)
+	defCORS := "http://localhost:3000"
+	if prod {
+		defCORS = ""
 	}
 	cfg := pipeline.DefaultConfig()
 	var threshold, likely, heavy float64
@@ -46,10 +52,13 @@ func main() {
 	motionPairs := flag.Int("motion-pairs", cfg.Model.Members[0].Pairs, "frame pairs (10 min each) each motion estimate averages")
 	useTrend := flag.Bool("trend", cfg.Model.Trend, "let echoes grow or weaken as they travel (the trend version is always recorded for stations)")
 	addr := flag.String("addr", ":8080", "HTTP listen address")
-	dbPath := flag.String("db", "data/raincast.db", "SQLite database path")
+	dbURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "cmd/collect's PostgreSQL, for the admin page's frame list (default $DATABASE_URL; empty: none)")
+	backtestReport := flag.String("backtest-report", "data/backtest.json", "report cmd/backtest writes, for the admin page")
+	redisURL := flag.String("redis", os.Getenv("REDIS_URL"), "Redis URL caching forecasts across processes (default $REDIS_URL; empty: this process's memory only)")
+	clientTiles := flag.Bool("client-tiles", false, "browsers download the radar tiles of their forecasts instead of this server (as on Vercel)")
 	cacheDir := flag.String("cache", "data/tiles-live", "radar tile cache directory (only for live forecasts; cmd/collect keeps its own in data/tiles)")
 	poll := flag.Duration("poll", 2*time.Minute, "how often to check for new frames")
-	cors := flag.String("cors", "http://localhost:3000", "allowed CORS origin (empty to disable)")
+	cors := flag.String("cors", defCORS, "allowed CORS origin (empty to disable; default none when APP_ENV=production)")
 	debug := flag.Bool("debug", false, "verbose logging")
 	geoUA := flag.String("geocode-ua", "raincast/1.0", "User-Agent sent to Geoapify and when expanding short map links")
 	mapStyle := flag.String("map-style", "osm-liberty", "Geoapify map tile style (see https://apidocs.geoapify.com/docs/maps/map-tiles/)")
@@ -96,11 +105,8 @@ func main() {
 		cfg.Stations = st
 	}
 
-	level := slog.LevelInfo
-	if *debug {
-		level = slog.LevelDebug
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	log := env.Logger(prod, *debug)
+	log.Info("environment", "app_env", env.Name(prod))
 
 	geo := geocode.New(os.Getenv("GEOAPIFY_KEY"), *geoUA, *geoCountries)
 	geo.Bias = &geocode.LatLon{Lat: cfg.Stations[0].Lat, Lon: cfg.Stations[0].Lon}
@@ -111,21 +117,23 @@ func main() {
 		// Coordinates and map links still work; addresses and the map do not.
 		log.Warn("GEOAPIFY_KEY is not set: address search and map tiles are off")
 	}
-	gip, err := geoip.Open(*geoipDB, log)
-	if err != nil {
-		// It loads once the geoip service writes the file; until then search
-		// favors -geocode-countries.
-		log.Info("geoip not loaded", "err", err)
-	}
 	log.Info("config", "stations", len(cfg.Stations), "model", cfg.Model.Name, "trend", cfg.Model.Trend, "geoapify", geo.Key != "")
-	lim.DiskPath, lim.DirPath = filepath.Dir(*dbPath), *cacheDir
-	if err := run(cfg, lim, *rateLimit, geo, gip, *addr, *dbPath, *cacheDir, *poll, *cors, log); err != nil {
+	opt := app.Options{
+		Pipeline: cfg, RedisURL: *redisURL, CacheDir: *cacheDir, RateLimit: *rateLimit,
+		Geocode: geo, GeoIPDB: *geoipDB,
+		Server: server.Config{CORSOrigin: *cors, ClientTiles: *clientTiles, Admin: !prod},
+	}
+	// The database and the report only feed the admin page.
+	if !prod {
+		opt.DatabaseURL, opt.BacktestReport = *dbURL, *backtestReport
+	}
+	if err := run(opt, lim, *addr, *poll, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Client, gip *geoip.DB, addr, dbPath, cacheDir string, poll time.Duration, cors string, log *slog.Logger) error {
+func run(opt app.Options, lim guard.Limits, addr string, poll time.Duration, log *slog.Logger) error {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Everything long-running derives from the guard's context, so crossing
@@ -133,25 +141,21 @@ func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Clie
 	ctx, _ := guard.Start(sigCtx, lim, log)
 	lim.Log(log)
 
-	st, err := store.Open(dbPath, float64(cfg.Threshold))
+	a, err := app.New(ctx, opt, log)
 	if err != nil {
 		return err
 	}
-	defer st.Close()
-
-	client := rainviewer.New(cacheDir)
-	client.SetRateLimit(rateLimit)
-	p := pipeline.New(cfg, client, log)
+	defer a.Close()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.Run(ctx, poll)
+		a.Pipeline.Run(ctx, poll)
 	}()
 	go func() {
 		t := time.NewTicker(time.Hour)
 		defer t.Stop()
 		for {
-			if err := geo.PruneTiles(); err != nil {
+			if err := opt.Geocode.PruneTiles(); err != nil {
 				log.Warn("prune map tiles", "err", err)
 			}
 			select {
@@ -163,18 +167,13 @@ func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Clie
 	}()
 
 	srv := &http.Server{
-		Addr: addr,
-		Handler: server.New(p, geo, st, log, server.Config{
-			CORSOrigin: cors, HorizonMin: cfg.Horizon, CountryOf: gip.Country,
-			Backtest: func() (*backtest.Report, error) {
-				return backtest.ReadReport(filepath.Join(filepath.Dir(dbPath), "backtest.json"))
-			},
-		}),
+		Addr:              addr,
+		Handler:           a.Handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 	errc := make(chan error, 1)
 	go func() {
-		log.Info("listening", "addr", addr, "primary", cfg.Stations[0].ID)
+		log.Info("listening", "addr", addr, "primary", opt.Pipeline.Stations[0].ID, "client_tiles", opt.Server.ClientTiles)
 		errc <- srv.ListenAndServe()
 	}()
 

@@ -1,6 +1,7 @@
 package pipeline
 
 import (
+	"fmt"
 	"testing"
 
 	"raincast/internal/model"
@@ -88,22 +89,23 @@ func TestMotionCacheDropsStale(t *testing.T) {
 	}
 }
 
-// A full region cache makes room for one more instead of emptying.
+// A full region cache makes room for one more instead of emptying, and
+// regions of older frames go first.
 func TestPutRegionKeepsOthersWhenFull(t *testing.T) {
 	p := New(DefaultConfig(), nil, nil)
-	p.putRegion(regionKey{0, 0, 600}, &region{})
+	p.putRegion("old", &region{frame: 600})
 	for i := range maxRegions + 1 {
-		p.putRegion(regionKey{i, 0, 1200}, &region{})
+		p.putRegion(fmt.Sprint(i), &region{frame: 1200})
 	}
 	if len(p.regions) != maxRegions {
 		t.Fatalf("%d regions, want %d", len(p.regions), maxRegions)
 	}
-	if _, ok := p.regions[regionKey{maxRegions, 0, 1200}]; !ok {
+	if _, ok := p.regions[fmt.Sprint(maxRegions)]; !ok {
 		t.Error("the region just added is missing")
 	}
-	for k := range p.regions {
-		if k.Frame != 1200 {
-			t.Errorf("region %+v from an older frame kept", k)
+	for k, r := range p.regions {
+		if r.frame != 1200 {
+			t.Errorf("region %s from an older frame kept", k)
 		}
 	}
 }

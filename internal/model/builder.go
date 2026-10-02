@@ -38,11 +38,26 @@ const cotrecIters = 200
 type Cache struct {
 	mu    sync.Mutex
 	pairs map[pairKey]*motion.Field
+	// Shared, when set, is asked for pairs this cache lacks and given every
+	// pair it estimates, for pairs whose Builder names their content
+	// (Builder.PairID).
+	Shared FieldStore
 }
 
+// FieldStore keeps motion fields by method and pair content beyond one
+// Cache, e.g. in a cache shared between processes.
+type FieldStore interface {
+	Get(method, id string) (*motion.Field, bool)
+	Put(method, id string, f *motion.Field)
+}
+
+// pairKey is a frame pair by its newer frame's time and, when the Builder
+// names it, its content: pairs of the same times built from other tiles
+// are other pairs.
 type pairKey struct {
 	method string
 	t      int64
+	id     string
 }
 
 // NewCache returns an empty cache.
@@ -68,15 +83,26 @@ func (c *Cache) Len() int {
 
 func (c *Cache) get(k pairKey) (*motion.Field, bool) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	f, ok := c.pairs[k]
+	c.mu.Unlock()
+	if ok || c.Shared == nil || k.id == "" {
+		return f, ok
+	}
+	if f, ok = c.Shared.Get(k.method, k.id); ok {
+		c.mu.Lock()
+		c.pairs[k] = f
+		c.mu.Unlock()
+	}
 	return f, ok
 }
 
 func (c *Cache) put(k pairKey, f *motion.Field) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.pairs[k] = f
+	c.mu.Unlock()
+	if c.Shared != nil && k.id != "" {
+		c.Shared.Put(k.method, k.id, f)
+	}
 }
 
 // Builder estimates motion fields over a run of frames.
@@ -89,11 +115,18 @@ type Builder struct {
 	// Workers is the goroutines per estimate; 0 means GOMAXPROCS.
 	Workers int
 	Cache   *Cache
+	// PairID, when set, names the content of the pair ending at t (say, a
+	// hash of both frames' tiles), so cached fields are only reused for
+	// the same radar data.
+	PairID func(t int64) string
 }
 
 // pair is method's motion for the frame pair ending at t, or nil.
 func (b *Builder) pair(method string, t int64) *motion.Field {
-	key := pairKey{method, t}
+	key := pairKey{method: method, t: t}
+	if b.PairID != nil {
+		key.id = b.PairID(t)
+	}
 	if f, ok := b.Cache.get(key); ok {
 		return f
 	}

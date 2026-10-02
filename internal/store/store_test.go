@@ -4,13 +4,19 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"testing"
 )
 
+// open connects to a fresh schema of the database at
+// RAINCAST_TEST_DATABASE_URL, skipping the test when it is unset.
 func open(t *testing.T) *Store {
 	t.Helper()
-	s, err := Open(filepath.Join(t.TempDir(), "test.db"), 20)
+	return openAt(t, TestDSN(t))
+}
+
+func openAt(t *testing.T, dsn string) *Store {
+	t.Helper()
+	s, err := Open(dsn)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -18,204 +24,8 @@ func open(t *testing.T) *Store {
 	return s
 }
 
-func TestVerifyPerStation(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	const t0 = 6000
-
-	if _, err := s.RecordFrame(ctx, t0, "/p0", map[string]float64{"a": -32, "b": -32}, 1); err != nil {
-		t.Fatal(err)
-	}
-	for _, st := range []string{"a", "b"} {
-		if err := s.SaveIssue(ctx, st, t0, 8, false, []byte(`{}`),
-			[]Forecast{{LeadMin: 10, PredDBZ: 30, PredRain: true}, {LeadMin: 20, PredDBZ: 5}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	// Rain arrives at a but not b.
-	n, err := s.RecordFrame(ctx, t0+600, "/p1", map[string]float64{"a": 35, "b": 5}, 2)
-	if err != nil || n != 2 {
-		t.Fatalf("verified %d, err %v", n, err)
-	}
-
-	rows, err := s.VerifiedRows(ctx)
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("rows = %+v %v", rows, err)
-	}
-	var hits, falseAlarms int
-	for _, r := range rows {
-		if r.PredRain && r.ObsRain {
-			hits++
-		}
-		if r.PredRain && !r.ObsRain {
-			falseAlarms++
-		}
-	}
-	if hits != 1 || falseAlarms != 1 {
-		t.Fatalf("hits=%d false alarms=%d", hits, falseAlarms)
-	}
-
-	if ok, _ := s.HasIssue(ctx, "a", t0); !ok {
-		t.Fatal("HasIssue(a) false")
-	}
-	if ok, _ := s.HasIssue(ctx, "c", t0); ok {
-		t.Fatal("HasIssue(c) true")
-	}
-	if ok, _ := s.HasFrame(ctx, t0+600); !ok {
-		t.Fatal("HasFrame false")
-	}
-	rain, err := s.StationRain(ctx)
-	if err != nil || !rain["a"][t0+600] || rain["b"][t0+600] {
-		t.Fatalf("rain = %v %v", rain, err)
-	}
-	issues, err := s.StationIssues(ctx)
-	if err != nil || len(issues["a"]) != 1 || issues["b"][0].ArrivalMin != 8 {
-		t.Fatalf("issues = %+v %v", issues, err)
-	}
-}
-
-func TestVerifyExistingObservation(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	// Target frame observed before the forecast is saved (restart/backfill).
-	if _, err := s.RecordFrame(ctx, 1200, "/p", map[string]float64{"a": 10}, 1); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.SaveIssue(ctx, "a", 600, -1, false, []byte(`{}`), []Forecast{{LeadMin: 10, PredDBZ: 25, PredRain: true}}); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := s.VerifiedRows(ctx)
-	if err != nil || len(rows) != 1 || rows[0].ObsRain || rows[0].ObsDBZ != 10 {
-		t.Fatalf("rows = %+v %v", rows, err)
-	}
-}
-
-// A database written by the single-station version keeps its data, assigned
-// to the legacy station.
-func TestMigrateFromSingleStation(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "old.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-		CREATE TABLE frames (time INTEGER PRIMARY KEY, path TEXT NOT NULL, obs_dbz REAL NOT NULL, recorded_at INTEGER NOT NULL);
-		CREATE TABLE issues (issued_at INTEGER PRIMARY KEY, arrival_min INTEGER NOT NULL, raining_now INTEGER NOT NULL, result_json TEXT NOT NULL);
-		CREATE TABLE forecasts (issued_at INTEGER NOT NULL, lead_min INTEGER NOT NULL, pred_dbz REAL NOT NULL, pred_rain INTEGER NOT NULL,
-			persist_dbz REAL NOT NULL, persist_rain INTEGER NOT NULL, obs_dbz REAL, obs_rain INTEGER, PRIMARY KEY (issued_at, lead_min));
-		CREATE INDEX forecasts_target ON forecasts (issued_at + lead_min * 60);
-		INSERT INTO frames VALUES (600, '/a', 25, 1), (1200, '/b', 30, 2);
-		INSERT INTO issues VALUES (600, 5, 1, '{}');
-		INSERT INTO forecasts VALUES (600, 10, 28, 1, 25, 1, 30, 1), (600, 20, 22, 1, 25, 1, NULL, NULL);
-	`); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	s, err := Open(path, 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx := context.Background()
-	rain, err := s.StationRain(ctx)
-	if err != nil || len(rain[LegacyStation]) != 2 {
-		t.Fatalf("rain = %v %v", rain, err)
-	}
-	if ok, _ := s.HasIssue(ctx, LegacyStation, 600); !ok {
-		t.Fatal("issue not migrated")
-	}
-	rows, err := s.VerifiedRows(ctx)
-	if err != nil || len(rows) != 1 || rows[0].ObsDBZ != 30 {
-		t.Fatalf("rows = %+v %v", rows, err)
-	}
-	// The pending lead still verifies against new observations.
-	if n, err := s.RecordFrame(ctx, 1800, "/c", map[string]float64{LegacyStation: 40}, 3); err != nil || n != 1 {
-		t.Fatalf("verified %d %v", n, err)
-	}
-	// Reopening an up-to-date database is a no-op.
-	s.Close()
-	s, err = Open(path, 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Close()
-}
-
-func TestObservedStations(t *testing.T) {
-	ctx := context.Background()
-	s := open(t)
-	if _, err := s.RecordFrame(ctx, 600, "/p", map[string]float64{"a": 1}, 1); err != nil {
-		t.Fatal(err)
-	}
-	// A station added later observes the same frame without clobbering a.
-	if _, err := s.RecordFrame(ctx, 600, "/p", map[string]float64{"b": 2}, 2); err != nil {
-		t.Fatal(err)
-	}
-	got, err := s.ObservedStations(ctx, 600)
-	if err != nil || !got["a"] || !got["b"] || len(got) != 2 {
-		t.Fatalf("observed = %v %v", got, err)
-	}
-}
-
-func TestMigrateV2AddsTrendColumns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "v2.db")
-	db, err := sql.Open("sqlite", path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := db.Exec(`
-		CREATE TABLE frames (time INTEGER PRIMARY KEY, path TEXT NOT NULL, recorded_at INTEGER NOT NULL);
-		CREATE TABLE observations (station TEXT NOT NULL, time INTEGER NOT NULL, obs_dbz REAL NOT NULL, PRIMARY KEY (station, time));
-		CREATE TABLE issues (station TEXT NOT NULL, issued_at INTEGER NOT NULL, arrival_min INTEGER NOT NULL,
-			raining_now INTEGER NOT NULL, result_json TEXT NOT NULL, PRIMARY KEY (station, issued_at));
-		CREATE TABLE forecasts (station TEXT NOT NULL, issued_at INTEGER NOT NULL, lead_min INTEGER NOT NULL,
-			pred_dbz REAL NOT NULL, pred_rain INTEGER NOT NULL, persist_dbz REAL NOT NULL, persist_rain INTEGER NOT NULL,
-			obs_dbz REAL, obs_rain INTEGER, PRIMARY KEY (station, issued_at, lead_min));
-		INSERT INTO forecasts VALUES ('a', 600, 10, 25, 1, 25, 1, 30, 1);
-		PRAGMA user_version = 2;
-	`); err != nil {
-		t.Fatal(err)
-	}
-	db.Close()
-
-	s, err := Open(path, 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	ctx := context.Background()
-	if err := s.SaveIssue(ctx, "a", 1200, -1, false, []byte(`{}`), []Forecast{
-		{LeadMin: 10, PredDBZ: 15, Trend: &TrendForecast{DBZ: 24, Rain: true}},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.RecordFrame(ctx, 1800, "/p", map[string]float64{"a": 26}, 1); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := s.VerifiedRows(ctx)
-	if err != nil || len(rows) != 2 {
-		t.Fatalf("rows = %+v %v", rows, err)
-	}
-	for _, r := range rows {
-		switch r.IssuedAt {
-		case 600:
-			if r.Trend != nil {
-				t.Errorf("old row has trend %+v", r.Trend)
-			}
-		case 1200:
-			if r.Trend == nil || !r.Trend.Rain || r.Trend.DBZ != 24 {
-				t.Errorf("new row trend = %+v", r.Trend)
-			}
-		}
-	}
-}
-
 func TestRegions(t *testing.T) {
-	st, err := Open(filepath.Join(t.TempDir(), "r.db"), 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer st.Close()
+	st := open(t)
 	ctx := context.Background()
 	r := Region{TileX: 116, TileY: 77, Lat: -35.5, Lon: 146.2, Climate: "midlat"}
 	for _, now := range []int64{2000, 1000, 3000} {
@@ -231,8 +41,8 @@ func TestRegions(t *testing.T) {
 		t.Fatalf("regions = %+v", got)
 	}
 
-	for _, ti := range []int64{1200, 600, 1800} {
-		if err := st.RecordFrameOnly(ctx, ti, fmt.Sprint("/p", ti), 1); err != nil {
+	for _, ti := range []int64{1200, 600, 1800, 1200} { // a repeat is kept once
+		if err := st.RecordFrame(ctx, ti, fmt.Sprint("/p", ti)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -242,5 +52,73 @@ func TestRegions(t *testing.T) {
 	}
 	if len(frames) != 2 || frames[0].Time != 1200 || frames[1].Path != "/p1800" {
 		t.Fatalf("frames = %+v", frames)
+	}
+	recent, err := st.RecentFrames(ctx, 2)
+	if err != nil || len(recent) != 2 || recent[0].Time != 1800 {
+		t.Fatalf("recent = %+v %v", recent, err)
+	}
+	c, err := st.Counts(ctx)
+	if err != nil || c != (Counts{Frames: 3, Regions: 1}) {
+		t.Fatalf("counts = %+v %v", c, err)
+	}
+}
+
+// Opening an up-to-date database again leaves it as it is.
+func TestReopen(t *testing.T) {
+	ctx := context.Background()
+	dsn := TestDSN(t)
+	s := openAt(t, dsn)
+	if err := s.RecordFrame(ctx, 600, "/p"); err != nil {
+		t.Fatal(err)
+	}
+	s2 := openAt(t, dsn)
+	if f, err := s2.FrameList(ctx, 0); err != nil || len(f) != 1 {
+		t.Fatalf("frame lost on reopen: %v %v", f, err)
+	}
+}
+
+// Schema 1 (with the online admin's tables) keeps its frames and regions
+// and loses the rest.
+func TestMigrateFromV1(t *testing.T) {
+	dsn := TestDSN(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range []string{
+		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
+		`INSERT INTO schema_version VALUES (1)`,
+		`CREATE TABLE frames (time BIGINT PRIMARY KEY, path TEXT NOT NULL, recorded_at BIGINT NOT NULL)`,
+		`INSERT INTO frames VALUES (600, '/a', 1)`,
+		`CREATE TABLE regions (tile_x INTEGER NOT NULL, tile_y INTEGER NOT NULL, lat DOUBLE PRECISION NOT NULL,
+			lon DOUBLE PRECISION NOT NULL, climate TEXT NOT NULL, first_seen BIGINT NOT NULL, last_active BIGINT NOT NULL,
+			PRIMARY KEY (tile_x, tile_y))`,
+		`INSERT INTO regions VALUES (1, 2, 3, 4, 'tropical', 5, 6)`,
+		`CREATE TABLE lookups (id BIGINT)`,
+		`CREATE TABLE forecasts (station TEXT)`,
+		`CREATE TABLE reports (name TEXT)`,
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := openAt(t, dsn)
+	ctx := context.Background()
+	if f, err := s.FrameList(ctx, 0); err != nil || len(f) != 1 || f[0].Path != "/a" {
+		t.Fatalf("frames = %+v %v", f, err)
+	}
+	if r, err := s.Regions(ctx); err != nil || len(r) != 1 || r[0].Climate != "tropical" {
+		t.Fatalf("regions = %+v %v", r, err)
+	}
+	var left int
+	db.QueryRow(`SELECT COUNT(*) FROM information_schema.tables
+		WHERE table_schema = current_schema() AND table_name IN ('lookups', 'forecasts', 'reports')`).Scan(&left)
+	var col int
+	db.QueryRow(`SELECT COUNT(*) FROM information_schema.columns
+		WHERE table_schema = current_schema() AND table_name = 'frames' AND column_name = 'recorded_at'`).Scan(&col)
+	if left != 0 || col != 0 {
+		t.Fatalf("%d old tables and %d old columns left", left, col)
 	}
 }

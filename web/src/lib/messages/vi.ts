@@ -94,9 +94,7 @@ export const vi = {
   admin: {
     tabs: {
       overview: "Tổng quan",
-      accuracy: "Độ chính xác",
-      issues: "Lịch sử dự báo",
-      lookups: "Lượt tra cứu",
+      backtest: "Backtest",
       frames: "Khung radar",
       tools: "Công cụ",
     },
@@ -128,13 +126,10 @@ export const vi = {
         `Vị trí mặc định: ${names.split(", ")[0]} · ${n} vị trí đặt sẵn · chạy từ ${since}`,
       lastError: "Lỗi lần poll gần nhất:",
 
-      stored: "Dữ liệu đã lưu",
+      stored: "Dữ liệu đã thu (cmd/collect)",
       frames: "Khung radar",
-      atStations: (n: number) => `đo tại ${n} trạm`,
-      issues: "Lần dự báo (điểm theo dõi)",
-      forecasts: "Dự đoán theo mốc",
-      verified: "Đã đối chiếu",
-      lookups: "Lượt tra cứu của người dùng",
+      regions: "Vùng theo dõi",
+      noDatabase: "Chưa nối database (DATABASE_URL)",
 
       geocoding: (on: boolean) => `Geoapify (từ lần khởi động) · ${on ? "đã có key" : "chưa có key"}`,
       cacheHits: "Trả từ cache",
@@ -143,45 +138,6 @@ export const vi = {
       tiles: "Ô bản đồ tải về",
       tilesSub: (cached: number, errors: number) => `${cached} từ cache · ${errors} lỗi`,
 
-    },
-
-    accuracy: {
-      series: {
-        model: "Mô hình",
-        persistence: "Giữ nguyên (baseline)",
-        trend: "Mô hình + xu hướng",
-      },
-      metrics: {
-        csi: "CSI",
-        accuracy: "Chính xác",
-        pod: "Bắt được mưa",
-        far: "Báo động giả",
-      },
-      csiModel: "CSI · mô hình",
-      csiTrend: "CSI · mô hình + xu hướng",
-      csiBaseline: "CSI · baseline",
-      accuracyPct: (p: string) => `chính xác ${p}`,
-      noData: "chưa có dữ liệu",
-      arrivalError: "Sai số giờ mưa tới",
-      noArrivals: "chưa có lần mưa tới nào",
-      arrivalBias: (n: number, late: boolean, mins: string) =>
-        `${n} lần · ${late ? "mưa tới trễ hơn" : "mưa tới sớm hơn"} dự báo ${mins} ph`,
-      byLeadShadow: (n: number) => `So sánh theo mốc · ${n} dự đoán có cả hai phiên bản`,
-      byLead: (n: number) => `Theo mốc dự báo · ${n} dự đoán`,
-      nothingYet: "Chưa có dự báo nào đủ thời gian để đối chiếu.",
-      chartNote: (n: number) =>
-        `Dữ liệu thật từ ${n} lần dự báo của các trạm, chấm khi khung radar thật về tới. “Xu hướng” cho vùng mưa mạnh lên hoặc yếu đi theo đà 20 phút gần nhất; nó chạy song song để so sánh, người dùng chưa thấy.`,
-      table: (n: number) => `Bảng chi tiết · toàn bộ ${n} dự đoán đã đối chiếu`,
-      lead: "Mốc",
-      count: "Số lần",
-      podFull: "Bắt được mưa (POD)",
-      farFull: "Báo động giả (FAR)",
-      contingency: "Trúng / trượt / giả / đúng-không-mưa",
-      maeDbz: "Sai số dBZ",
-      tableNote: "Số nhỏ là baseline “trời giữ nguyên”. CSI = trúng / (trúng + trượt + giả), chỉ số chính để tối ưu.",
-      metricGroup: "Chỉ số",
-      chartLabel: "Chỉ số theo mốc dự báo",
-      tooltipCases: (n: number, c: string) => `${n} lần · trúng/trượt/giả/đúng: ${c}`,
     },
 
     backtest: {
@@ -232,26 +188,10 @@ export const vi = {
     },
 
     history: {
-      issuesTitle: (n: number) => `Lịch sử dự báo của các trạm (${n} lần gần nhất)`,
-      frame: "Khung radar",
-      station: "Trạm",
-      then: "Lúc đó",
-      rainIn: "Mưa tới sau",
-      heavyIn: "Mưa to sau",
-      predVsObs: (m: number) => `+${m}′ dự / thật`,
-      issuesNote:
-        "dBZ dự báo / dBZ đo được khi khung thật về (… = chưa tới giờ). “đúng/sai” so mưa (≥ ngưỡng) với không mưa.",
-      framesTitle: (n: number) => `Khung radar đã ghi (${n}) · dBZ đo tại từng trạm`,
+      framesTitle: (n: number) => `Khung radar đã ghi (${n} gần nhất)`,
       frameTime: "Thời điểm khung",
-      recordedAt: "Ghi lúc",
-      framesNote: "≥ 20 dBZ là mưa, ≥ 40 là mưa to; “–” là không có mưa hoặc chưa đo.",
-      lookupsTitle: (n: number) => `Lượt tra cứu của người dùng (${n} gần nhất)`,
-      at: "Lúc",
-      place: "Vị trí",
-      result: "Kết quả",
-      motion: "Di chuyển",
-      viewRadar: "Xem radar",
-      noLookups: "Chưa có lượt tra cứu nào.",
+      path: "Đường dẫn tile",
+      noFrames: "Chưa có khung nào (hoặc chưa nối database).",
     },
 
     tools: {

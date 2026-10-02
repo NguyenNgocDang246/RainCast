@@ -8,14 +8,16 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 
 	"raincast/internal/collect"
+	"raincast/internal/dotenv"
+	"raincast/internal/env"
 	"raincast/internal/guard"
 	"raincast/internal/pipeline"
 	"raincast/internal/rainviewer"
@@ -23,7 +25,13 @@ import (
 )
 
 func main() {
-	dbPath := flag.String("db", "data/raincast.db", "SQLite database path (shared with raincast)")
+	// DATABASE_URL comes from the environment or .env.
+	if err := dotenv.Load(".env"); err != nil {
+		fmt.Fprintln(os.Stderr, "load .env:", err)
+		os.Exit(1)
+	}
+	dbURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "PostgreSQL URL for the collected frames, shared with backtest (default $DATABASE_URL)")
+	dataDir := flag.String("data", "data", "directory whose disk the guard watches")
 	cacheDir := flag.String("cache", "data/tiles", "tile cache directory, read by cmd/backtest")
 	poll := flag.Duration("poll", 2*time.Minute, "how often to check for new frames")
 	cacheAge := flag.Duration("cache-age", pipeline.DefaultConfig().CacheAge, "how long radar tiles are kept for backtesting")
@@ -35,21 +43,17 @@ func main() {
 	debug := flag.Bool("debug", false, "verbose logging")
 	flag.Parse()
 
-	level := slog.LevelInfo
-	if *debug {
-		level = slog.LevelDebug
-	}
-	log := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
+	log := env.Logger(env.Production(false), *debug)
 	lim := limits()
-	lim.DiskPath, lim.DirPath = filepath.Dir(*dbPath), *cacheDir
-	if err := run(col, lim, *keepAwake, *dbPath, *cacheDir, *poll, *cacheAge, *rateLimit, log); err != nil {
+	lim.DiskPath, lim.DirPath = *dataDir, *cacheDir
+	if err := run(col, lim, *keepAwake, *dbURL, *cacheDir, *poll, *cacheAge, *rateLimit, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
 func run(col collect.Config, lim guard.Limits, keepAwake bool,
-	dbPath, cacheDir string, poll, cacheAge time.Duration, rateLimit int, log *slog.Logger) error {
+	dbURL, cacheDir string, poll, cacheAge time.Duration, rateLimit int, log *slog.Logger) error {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Everything long-running derives from the guard's context, so crossing
@@ -60,7 +64,7 @@ func run(col collect.Config, lim guard.Limits, keepAwake bool,
 		go guard.KeepAwake(ctx)
 	}
 
-	st, err := store.Open(dbPath, 20)
+	st, err := store.Open(dbURL)
 	if err != nil {
 		return err
 	}

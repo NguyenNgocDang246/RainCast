@@ -38,13 +38,14 @@ export function OverviewTab() {
       </Panel>
 
       <Panel title={o.stored}>
-        <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-          <Stat label={o.frames} value={c.frames} sub={o.atStations(c.stations)} />
-          <Stat label={o.issues} value={c.issues} />
-          <Stat label={o.forecasts} value={c.forecasts} />
-          <Stat label={o.verified} value={c.verified} />
-          <Stat label={o.lookups} value={c.lookups} />
-        </div>
+        {c ? (
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+            <Stat label={o.frames} value={c.frames} />
+            <Stat label={o.regions} value={c.regions} />
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">{o.noDatabase}</p>
+        )}
       </Panel>
 
       <Panel title={o.geocoding(g.geoapify_enabled)}>

@@ -15,8 +15,11 @@ import (
 )
 
 type fakeSource struct {
-	lat, lon  float64
-	notLoaded bool // the frame index has not been loaded yet
+	lat, lon   float64
+	notLoaded  bool // the frame index has not been loaded yet
+	refreshed  int  // EnsureFresh calls
+	frame      int64
+	cachedHash string // content hash of the last uploaded tiles
 }
 
 func (f *fakeSource) Ready() bool { return !f.notLoaded }
@@ -35,6 +38,37 @@ func (f *fakeSource) ForecastAt(_ context.Context, lat, lon float64) (*pipeline.
 		return nil, pipeline.ErrNotReady
 	}
 	f.lat, f.lon = lat, lon
+	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, nil
+}
+
+func (f *fakeSource) EnsureFresh(context.Context) { f.refreshed++ }
+
+// The fake plan is one tile; its content hash is the tile's bytes.
+func (f *fakeSource) Plan(lat, lon float64) (pipeline.TilePlan, error) {
+	if f.notLoaded {
+		return pipeline.TilePlan{}, pipeline.ErrNotReady
+	}
+	return pipeline.TilePlan{Frame: f.frame, Tiles: []pipeline.TileRef{
+		{TileID: pipeline.TileID{Time: f.frame, X: 101, Y: 60}, URL: "https://tiles/101/60.png"},
+	}}, nil
+}
+
+func (f *fakeSource) Cached(_ context.Context, lat, lon float64, hash string) (*pipeline.Snapshot, bool) {
+	if hash == "" || hash != f.cachedHash {
+		return nil, false
+	}
+	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, true
+}
+
+func (f *fakeSource) ForecastFromTiles(_ context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte) (*pipeline.Snapshot, error) {
+	data, ok := tiles[pipeline.TileID{Time: f.frame, X: 101, Y: 60}]
+	switch {
+	case len(tiles) == 1 && !ok:
+		return nil, pipeline.ErrStaleTiles
+	case len(tiles) != 1 || string(data) == "bad":
+		return nil, pipeline.ErrBadTiles
+	}
+	f.cachedHash = string(data)
 	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, nil
 }
 
@@ -77,7 +111,7 @@ func do(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
 
 func TestForecastEndpoint(t *testing.T) {
 	src := &fakeSource{notLoaded: true}
-	h := New(src, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(src, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 
 	if rec := do(t, h, "/api/forecast?lat=10&lon=106"); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("before the frame index loads: %d", rec.Code)
@@ -103,7 +137,7 @@ func TestForecastEndpoint(t *testing.T) {
 }
 
 func TestGeocodeEndpoint(t *testing.T) {
-	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 	rec := do(t, h, "/api/geocode?q=Th%E1%BB%A7+%C4%90%E1%BB%A9c")
 	var ps []geocode.Place
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ps) != nil || ps[0].Name != "Thủ Đức" {
@@ -118,7 +152,7 @@ func TestGeocodeEndpoint(t *testing.T) {
 }
 
 func TestSuggestEndpoint(t *testing.T) {
-	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 	for path, want := range map[string]string{
 		"/api/suggest?q=ben":                    "ben",
 		"/api/suggest?q=ben&lat=10.8&lon=106.7": "ben near",
@@ -134,7 +168,6 @@ func TestSuggestEndpoint(t *testing.T) {
 
 func TestSearchUsesClientCountry(t *testing.T) {
 	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
-		HorizonMin: 60,
 		CountryOf: func(ip netip.Addr) string {
 			return map[string]string{"203.0.113.5": "sg", "198.51.100.7": "vn"}[ip.String()]
 		},
@@ -165,7 +198,7 @@ func TestSearchUsesClientCountry(t *testing.T) {
 }
 
 func TestReverseEndpoint(t *testing.T) {
-	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 	rec := do(t, h, "/api/reverse?lat=10.123456&lon=106.7")
 	var p geocode.Place
 	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &p) != nil || p.Name != "here" || p.Lat != 10.1235 {
@@ -177,7 +210,7 @@ func TestReverseEndpoint(t *testing.T) {
 }
 
 func TestTileEndpoint(t *testing.T) {
-	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 	rec := do(t, h, "/api/tiles/5/24/14.png")
 	if rec.Code != http.StatusOK || rec.Body.String() != "png" || rec.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
@@ -191,7 +224,7 @@ func TestTileEndpoint(t *testing.T) {
 
 func TestRadarEndpoint(t *testing.T) {
 	src := &fakeSource{notLoaded: true}
-	h := New(src, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	h := New(src, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
 	if rec := do(t, h, "/api/radar"); rec.Code != http.StatusServiceUnavailable {
 		t.Errorf("before the frame index loads: %d", rec.Code)
 	}

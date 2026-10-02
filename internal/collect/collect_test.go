@@ -129,7 +129,7 @@ func (s *fakeStore) TouchRegion(_ context.Context, r store.Region, now int64) er
 	return nil
 }
 
-func (s *fakeStore) RecordFrameOnly(_ context.Context, t int64, _ string, _ int64) error {
+func (s *fakeStore) RecordFrame(_ context.Context, t int64, _ string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.frames[t] = true

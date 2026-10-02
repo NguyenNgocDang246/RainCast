@@ -1,46 +1,49 @@
-# Deploy everything on one server:
-#   cp .env.example .env   # fill in GEOAPIFY_KEY, SITE_ADDRESS, ADMIN_*
-#   docker compose up -d --build
-# Only Caddy is reachable from outside (ports 80/443).
+# The collector machine: radar data for backtesting goes to data/tiles and
+# to a local PostgreSQL. The web app and API run on Vercel and need neither.
+#   cp .env.example .env
+#   docker compose up -d
+# Score the collected data (writes data/backtest.json for the admin page):
+#   docker compose run --rm --entrypoint backtest collect
+# The admin page runs locally: go run ./cmd/raincast (uses db and redis
+# through .env), then npm run dev in web/, and open
+# http://localhost:3000/admin.
 services:
-  api:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: raincast
+      POSTGRES_PASSWORD: raincast
+      POSTGRES_DB: raincast
+    # Only this machine reaches it (cmd/raincast, cmd/migrate-pg on the host).
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - raincast-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U raincast"]
+      interval: 5s
+      retries: 10
+
+  # Forecast cache for the local cmd/raincast (REDIS_URL in .env), as Upstash
+  # is on Vercel. Only a cache: nothing is persisted.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    ports:
+      - "127.0.0.1:6379:6379"
+
+  collect:
     build: .
     restart: unless-stopped
     env_file: .env
-    volumes:
-      - raincast-data:/app/data
-      - geoip-data:/app/geoip:ro
-
-  # Keeps DB-IP's free IP-to-country database (CC BY 4.0, no account; a new
-  # one each month) fresh. It names the user's country for address search.
-  # Written to a temp file and renamed, so the api never reads half a file.
-  geoip:
-    image: alpine:3
-    restart: unless-stopped
-    volumes:
-      - geoip-data:/geoip
-    command:
-      - sh
-      - -c
-      - |
-        while :; do
-          if [ ! -s /geoip/country.mmdb ] || [ -n "$$(find /geoip/country.mmdb -mtime +7)" ]; then
-            m=$$(date -u +%Y-%m)
-            wget -qO- "https://download.db-ip.com/free/dbip-country-lite-$$m.mmdb.gz" | gunzip > /geoip/country.tmp \
-              && [ -s /geoip/country.tmp ] && mv /geoip/country.tmp /geoip/country.mmdb && echo "updated $$m" \
-              || { rm -f /geoip/country.tmp; echo "download failed"; }
-          fi
-          sleep 86400
-        done
-
-  # Collects radar data for backtesting, apart from the web app. Off by
-  # default: docker compose --profile collect up -d. Score the data with
-  #   docker compose run --rm --entrypoint backtest api   (writes the admin page's report)
-  collect:
-    build: .
-    profiles: [collect]
-    restart: unless-stopped
-    entrypoint: ["collect"]
+    environment:
+      # The db service, not the host's localhost in .env.
+      DATABASE_URL: postgres://raincast:raincast@db:5432/raincast?sslmode=disable
+    depends_on:
+      db:
+        condition: service_healthy
     # A second fence behind the built-in guard (-max-cpu, -max-memory-mb…),
     # so a laptop stays usable while collecting.
     cpus: "2"
@@ -48,27 +51,6 @@ services:
     volumes:
       - raincast-data:/app/data
 
-  web:
-    build: ./web
-    restart: unless-stopped
-    depends_on: [api]
-
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy-data:/data
-      - caddy-config:/config
-    depends_on: [api, web]
-
 volumes:
+  raincast-db:
   raincast-data:
-  geoip-data:
-  caddy-data:
-  caddy-config:

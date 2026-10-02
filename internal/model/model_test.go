@@ -4,6 +4,7 @@ import (
 	"math"
 	"testing"
 
+	"raincast/internal/motion"
 	"raincast/internal/nowcast"
 	"raincast/internal/radar"
 )
@@ -147,5 +148,64 @@ func TestParse(t *testing.T) {
 	}
 	if _, err := Parse("nope", 4, false); err == nil {
 		t.Fatal("unknown model accepted")
+	}
+}
+
+// A Prepared that went through MarshalBinary forecasts exactly the same.
+func TestPreparedRoundTrip(t *testing.T) {
+	b, last := builder([]int{0, 4, 8, 12, 16})
+	p := Default().Prepare(b, last, 15)
+	data, err := p.MarshalBinary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var q Prepared
+	if err := q.UnmarshalBinary(data); err != nil {
+		t.Fatal(err)
+	}
+	if q.Used != p.Used || q.HasTrend() != p.HasTrend() || q.Display.Global != p.Display.Global {
+		t.Fatalf("decoded %+v, want %+v", q, p)
+	}
+	opt := nowcast.Options{Horizon: 60, Threshold: 20, Radius: 1, KmPerPx: 1.2}
+	for _, trend := range []bool{false, true} {
+		want := p.Forecast(b.Grid(last), 162, 170, opt, trend)
+		got := q.Forecast(b.Grid(last), 162, 170, opt, trend)
+		if got.ArrivalMin != want.ArrivalMin || got.SpeedKmh != want.SpeedKmh || len(got.Series) != len(want.Series) {
+			t.Fatalf("trend=%v: forecast %+v, want %+v", trend, got, want)
+		}
+		for i := range want.Series {
+			if got.Series[i] != want.Series[i] {
+				t.Fatalf("trend=%v: series[%d] = %+v, want %+v", trend, i, got.Series[i], want.Series[i])
+			}
+		}
+	}
+}
+
+type mapStore map[string]*motion.Field
+
+func (m mapStore) Get(method, id string) (*motion.Field, bool) { f, ok := m[method+id]; return f, ok }
+func (m mapStore) Put(method, id string, f *motion.Field)      { m[method+id] = f }
+
+// Named pairs are cached by content: other content at the same times is
+// estimated anew, and the shared store serves a fresh Cache.
+func TestCacheKeysPairsByContent(t *testing.T) {
+	shared := mapStore{}
+	b, last := builder([]int{0, 4})
+	b.Cache.Shared = shared
+	b.PairID = func(int64) string { return "a" }
+	fa, _ := b.Field(TREC, last, 1)
+	if len(shared) != 1 || shared[TREC+"a"] != fa {
+		t.Fatalf("shared store = %v", shared)
+	}
+	b.PairID = func(int64) string { return "b" }
+	if fb, _ := b.Field(TREC, last, 1); fb == fa {
+		t.Fatal("a pair with other content reused the cached field")
+	}
+	// A new process (empty Cache) finds content "a" in the shared store.
+	b2, _ := builder([]int{0, 4})
+	b2.Cache.Shared = shared
+	b2.PairID = func(int64) string { return "a" }
+	if f, _ := b2.Field(TREC, last, 1); f != fa {
+		t.Fatal("shared field not used")
 	}
 }

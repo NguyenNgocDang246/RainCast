@@ -6,12 +6,14 @@ package pipeline
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sort"
 	"sync"
 	"time"
 
+	"raincast/internal/cache"
 	"raincast/internal/geo"
 	"raincast/internal/model"
 	"raincast/internal/motion"
@@ -63,6 +65,12 @@ type Config struct {
 	Model model.Model
 	// CacheAge is how long downloaded tiles are kept.
 	CacheAge time.Duration
+	// IndexMaxAge, when set, makes EnsureFresh reload a frame index older
+	// than this: for hosts without a background poller (serverless).
+	IndexMaxAge time.Duration
+	// Shared, when set, shares regions, motion and the frame index with
+	// other processes; nil keeps them in this process's memory only.
+	Shared cache.Shared
 }
 
 // DefaultConfig uses DefaultStations.
@@ -112,7 +120,7 @@ type Pipeline struct {
 	mu      sync.RWMutex
 	host    string             // tile host from the latest index
 	frames  []rainviewer.Frame // latest index, ascending
-	regions map[regionKey]*region
+	regions map[string]*region // by regionFor key
 	motion  map[tileKey]*motionCache
 	flight  singleflight.Group
 
@@ -124,7 +132,7 @@ type Pipeline struct {
 
 // New builds a pipeline. cfg.Stations must not be empty.
 func New(cfg Config, client *rainviewer.Client, log *slog.Logger) *Pipeline {
-	return &Pipeline{cfg: cfg, client: client, log: log, regions: map[regionKey]*region{}, motion: map[tileKey]*motionCache{}, started: time.Now()}
+	return &Pipeline{cfg: cfg, client: client, log: log, regions: map[string]*region{}, motion: map[tileKey]*motionCache{}, started: time.Now()}
 }
 
 // Primary is the first station, where address search is biased toward.
@@ -204,18 +212,7 @@ func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
-		err := p.Tick(ctx)
-		if err != nil && ctx.Err() == nil {
-			p.log.Error("tick failed", "err", err)
-		}
-		p.mu.Lock()
-		p.ticks++
-		p.lastTick = time.Now()
-		p.lastErr = ""
-		if err != nil {
-			p.lastErr = err.Error()
-		}
-		p.mu.Unlock()
+		p.refresh(ctx)
 		select {
 		case <-ctx.Done():
 			return
@@ -224,10 +221,51 @@ func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// Tick reloads the frame index. Radar tiles are only fetched when a
+// EnsureFresh reloads the frame index when it is older than
+// Config.IndexMaxAge (a no-op without one). Concurrent callers share one
+// reload, which outlives a caller that gives up.
+func (p *Pipeline) EnsureFresh(ctx context.Context) {
+	if p.cfg.IndexMaxAge <= 0 {
+		return
+	}
+	p.mu.RLock()
+	fresh := len(p.frames) >= 2 && time.Since(p.lastTick) < p.cfg.IndexMaxAge
+	p.mu.RUnlock()
+	if fresh {
+		return
+	}
+	p.flight.Do("index", func() (any, error) {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		p.refresh(ctx)
+		return nil, nil
+	})
+}
+
+// refresh runs Tick and records the outcome for Status.
+func (p *Pipeline) refresh(ctx context.Context) {
+	err := p.Tick(ctx)
+	if err != nil && ctx.Err() == nil {
+		p.log.Error("tick failed", "err", err)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.ticks++
+	p.lastTick = time.Now()
+	p.lastErr = ""
+	if err != nil {
+		p.lastErr = err.Error()
+	}
+}
+
+// sharedIndexTTL is how long one process's frame index serves the others.
+const sharedIndexTTL = time.Minute
+
+// Tick reloads the frame index, from the shared cache when another process
+// loaded it within the last minute. Radar tiles are only fetched when a
 // forecast is asked for.
 func (p *Pipeline) Tick(ctx context.Context) error {
-	maps, err := p.client.FetchMaps(ctx)
+	maps, err := p.loadMaps(ctx)
 	if err != nil {
 		return err
 	}
@@ -245,29 +283,26 @@ func (p *Pipeline) Tick(ctx context.Context) error {
 	return nil
 }
 
-// loadMosaic fetches and stitches the side×side tiles whose top-left is
-// (tx0, ty0). Tiles outside the world (near the poles or the antimeridian)
-// are skipped.
-func (p *Pipeline) loadMosaic(ctx context.Context, host string, f rainviewer.Frame, tx0, ty0, side int) (*radar.Mosaic, error) {
-	n := 1 << p.cfg.Zoom
-	var tiles []rainviewer.Tile
-	for dy := range side {
-		for dx := range side {
-			x, y := tx0+dx, ty0+dy
-			if x >= 0 && y >= 0 && x < n && y < n {
-				tiles = append(tiles, rainviewer.Tile{Z: p.cfg.Zoom, X: x, Y: y})
+func (p *Pipeline) loadMaps(ctx context.Context) (*rainviewer.Maps, error) {
+	const key = "rc:index"
+	if p.cfg.Shared != nil {
+		if data, ok := p.cfg.Shared.Get(ctx, key); ok {
+			var m rainviewer.Maps
+			if err := json.Unmarshal(data, &m); err == nil && m.Host != "" {
+				return &m, nil
 			}
 		}
 	}
-	raw, err := p.client.FetchTiles(ctx, host, f.Path, tiles)
+	m, err := p.client.FetchMaps(ctx)
 	if err != nil {
 		return nil, err
 	}
-	byKey := make(map[radar.TileKey][]byte, len(raw))
-	for t, data := range raw {
-		byKey[radar.TileKey{X: t.X, Y: t.Y}] = data
+	if p.cfg.Shared != nil {
+		if data, err := json.Marshal(m); err == nil {
+			p.cfg.Shared.Set(ctx, key, data, sharedIndexTTL)
+		}
 	}
-	return radar.BuildMosaic(byKey, p.cfg.Zoom, tx0, ty0, side, radar.DefaultPalette)
+	return m, nil
 }
 
 // nowcastOptions returns extrapolation settings for a target at latitude lat.

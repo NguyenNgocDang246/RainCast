@@ -57,7 +57,7 @@ type Fetcher interface {
 // Store is the part of store.Store the collector uses.
 type Store interface {
 	TouchRegion(ctx context.Context, r store.Region, now int64) error
-	RecordFrameOnly(ctx context.Context, t int64, path string, now int64) error
+	RecordFrame(ctx context.Context, t int64, path string) error
 }
 
 // Feed returns the tile host and the current frame index, oldest first.
@@ -422,7 +422,7 @@ func (c *Collector) collect(ctx context.Context, host string, frames []rainviewe
 				continue
 			}
 			if !recorded {
-				if err := c.store.RecordFrameOnly(ctx, f.Time, f.Path, now.Unix()); err != nil {
+				if err := c.store.RecordFrame(ctx, f.Time, f.Path); err != nil {
 					c.log.Warn("collect: record frame", "err", err)
 				}
 				recorded = true

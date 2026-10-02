@@ -22,13 +22,18 @@ export type Forecast = {
 export type Place = { name: string; address: string; lat: number; lon: number };
 
 /**
- * Prefix for every /api request. Empty means same origin: in production Caddy
- * routes /api to the Go backend, in dev Next rewrites it (next.config.ts).
+ * Prefix for public /api requests. Empty means same origin: the Next
+ * rewrite (next.config.ts) routes /api to the Go backend. On Vercel it is
+ * the backend's own URL, so the backend sees the visitor's IP and country
+ * and its CDN caches map tiles.
  */
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const res = await fetch(API_BASE + path, { cache: "no-store", signal });
+  return readJSON<T>(await fetch(API_BASE + path, { cache: "no-store", signal }));
+}
+
+async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     // Kept in the backend's words; components translate with errorText.
@@ -37,9 +42,58 @@ async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** Forecast for a chosen place. */
-export function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<Forecast> {
-  return getJSON<Forecast>(`/api/forecast?lat=${place.lat}&lon=${place.lon}`);
+/** Radar tiles a forecast reads, which the browser downloads itself (internal/pipeline TilePlan). */
+type TilePlan = { frame: number; tiles: { time: number; x: number; y: number; url: string }[] };
+type TilesNeeded = { tiles_needed: TilePlan };
+
+const needsTiles = (r: Forecast | TilesNeeded): r is TilesNeeded => "tiles_needed" in r;
+
+async function sha256Hex(data: BufferSource): Promise<string> {
+  const sum = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
+  return Array.from(sum, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+/** The tiles' content hash, as pipeline.ContentHash computes it. */
+async function contentHash(plan: TilePlan, tiles: Uint8Array<ArrayBuffer>[]): Promise<string> {
+  const lines = await Promise.all(
+    plan.tiles.map(async (t, i) => `${t.time}:${t.x}:${t.y}:${await sha256Hex(tiles[i])}\n`),
+  );
+  return sha256Hex(new TextEncoder().encode(lines.join("")));
+}
+
+/**
+ * Forecast for a chosen place. A backend on a shared host (Vercel) answers
+ * with the radar tiles to download instead: the browser fetches them from
+ * RainViewer (its own per-IP limit, its own HTTP cache), asks whether the
+ * server already has a forecast from exactly those tiles, and uploads them
+ * when it does not.
+ */
+export async function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<Forecast> {
+  const path = `/api/forecast?lat=${place.lat}&lon=${place.lon}`;
+  let answer = await getJSON<Forecast | TilesNeeded>(path);
+  for (let attempt = 0; ; attempt++) {
+    if (!needsTiles(answer)) return answer;
+    const plan = answer.tiles_needed;
+    const tiles = await Promise.all(
+      plan.tiles.map(async (t) => {
+        const res = await fetch(t.url, { cache: "force-cache" });
+        if (!res.ok) throw new Error(`radar tile: HTTP ${res.status}`);
+        return new Uint8Array(await res.arrayBuffer());
+      }),
+    );
+    const cached = await getJSON<Forecast | TilesNeeded>(`${path}&h=${await contentHash(plan, tiles)}`);
+    if (!needsTiles(cached)) return cached;
+
+    const form = new FormData();
+    plan.tiles.forEach((t, i) => form.append(`${t.time}_${t.x}_${t.y}`, new Blob([tiles[i]], { type: "image/png" }), "tile.png"));
+    const res = await fetch(API_BASE + path, { method: "POST", body: form, cache: "no-store" });
+    // A new radar frame arrived meanwhile: the answer carries the new plan.
+    if (res.status === 409 && attempt === 0) {
+      answer = (await res.json()) as TilesNeeded;
+      continue;
+    }
+    return readJSON<Forecast>(res);
+  }
 }
 
 /** Resolves an address, "lat, lon" or a Google Maps link. */
