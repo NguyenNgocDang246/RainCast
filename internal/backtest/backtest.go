@@ -62,6 +62,7 @@ type Variant struct {
 	Method string
 	Pairs  int  // frame pairs averaged for motion, newest weighted most
 	Trend  bool // extrapolate intensity growth/decay
+	Accel  bool // let motion keep changing as it did over the pairs
 	// Members are the Names of the variants an ensemble combines; they
 	// must come earlier in Config.Variants.
 	Members []string
@@ -122,6 +123,7 @@ type Result struct {
 	Method   string        `json:"method"`
 	Pairs    int           `json:"pairs"`
 	Trend    bool          `json:"trend"`
+	Accel    bool          `json:"accel,omitempty"`
 	Baseline bool          `json:"baseline"`
 	Leads    []LeadScore   `json:"leads"`
 	Overall  verify.Scores `json:"overall"`

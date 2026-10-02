@@ -53,6 +53,7 @@ export type BacktestResult = {
   method?: string;
   pairs?: number;
   trend?: boolean;
+  accel?: boolean;
   baseline?: boolean;
   leads: { lead_min: number; scores: Scores; mae_dbz: number | null; brier?: number | null }[];
   overall: Scores;

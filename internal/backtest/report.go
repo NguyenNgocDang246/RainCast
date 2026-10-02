@@ -19,7 +19,7 @@ const (
 func (cfg Config) heads() []Result {
 	out := []Result{{Name: "Giữ nguyên (baseline)", Method: "persistence", Baseline: true}}
 	for _, v := range cfg.Variants {
-		out = append(out, Result{Name: v.Name, Method: v.Method, Pairs: v.Pairs, Trend: v.Trend})
+		out = append(out, Result{Name: v.Name, Method: v.Method, Pairs: v.Pairs, Trend: v.Trend, Accel: v.Accel})
 	}
 	return out
 }

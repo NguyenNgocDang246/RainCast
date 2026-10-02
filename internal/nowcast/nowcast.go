@@ -21,6 +21,11 @@ type Options struct {
 	// rate·τ·(1−e^(−m/τ)), so a trend never runs away over the hour.
 	Trend    *motion.Trend
 	TrendTau float64 // minutes; default 20
+	// Accel, when set, lets motion keep changing as it did lately (pixels
+	// per minute²), damped the same way: after s minutes the velocity has
+	// changed by A·τ·(1−e^(−s/τ)), at most A·τ.
+	Accel    *motion.Field
+	AccelTau float64 // minutes; default 20
 	// ProbRadius, when set, also yields a rain probability per minute: the
 	// share of pixels at or above Threshold within ProbRadius(m) pixels of
 	// the upstream point. The radius grows with lead time because position
@@ -79,12 +84,29 @@ func (r Result) At(m int) float32 {
 
 // Forecast traces backward from target (x, y) through field f: the echo that
 // will be over the target in m minutes is the one now at the upstream point
-// (semi-Lagrangian advection, assuming steady motion and no growth/decay).
+// (semi-Lagrangian advection, assuming steady motion and no growth/decay
+// unless opt.Accel and opt.Trend say otherwise). Each one-minute step uses
+// the velocity at its midpoint, so curved paths are followed closely.
 func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result {
 	r := Result{Series: make([]Point, 0, opt.Horizon+1)}
 	tau := opt.TrendTau
 	if tau <= 0 {
 		tau = 20
+	}
+	atau := opt.AccelTau
+	if atau <= 0 {
+		atau = 20
+	}
+	// accelShift is the extra displacement acceleration adds by minute s.
+	accelShift := func(s float64) float64 { return atau*s - atau*atau*(1-math.Exp(-s/atau)) }
+	vel := func(px, py, gain float64) motion.Vector {
+		v := f.At(px, py)
+		if opt.Accel != nil {
+			a := opt.Accel.At(px, py)
+			v.DX += a.DX * gain
+			v.DY += a.DY * gain
+		}
+		return v
 	}
 	px, py := x, y
 	for m := 0; m <= opt.Horizon; m++ {
@@ -105,7 +127,14 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 		}
 		r.Series = append(r.Series, pt)
 		if f != nil {
-			d := f.At(px, py)
+			// Steady motion moves an echo the same distance every minute;
+			// acceleration adds accelShift(m+1)−accelShift(m) for this one.
+			// Along the backward path the minutes are taken nearest the
+			// target first, which only matters where acceleration varies
+			// over the distance travelled.
+			gain := accelShift(float64(m+1)) - accelShift(float64(m))
+			d := vel(px, py, gain)
+			d = vel(px-d.DX/2, py-d.DY/2, gain)
 			px -= d.DX
 			py -= d.DY
 		}

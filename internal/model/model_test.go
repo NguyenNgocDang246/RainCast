@@ -97,6 +97,24 @@ func TestEveryMethodBuildsAField(t *testing.T) {
 	}
 }
 
+// Cells gaining 1 px per 10 min each frame: the newer two pairs average
+// 0.45 px/min, the older two 0.25, 20 minutes apart.
+func TestAccelOfSpeedingCells(t *testing.T) {
+	b, last := builder([]int{0, 2, 5, 9, 14})
+	for _, m := range Methods {
+		a := b.Accel(m, last, 4)
+		if a == nil {
+			t.Fatalf("%s: no acceleration", m)
+		}
+		if v := a.At(110, 170); math.Abs(v.DX-0.01) > 0.004 {
+			t.Errorf("%s: accel at a cell %.4f px/min², want ≈ 0.01", m, v.DX)
+		}
+	}
+	if a := b.Accel(TREC, last, 1); a != nil {
+		t.Error("one pair cannot show acceleration")
+	}
+}
+
 // An ensemble of one method is that method.
 func TestEnsembleOfOneIsTheMethod(t *testing.T) {
 	b, last := builder([]int{0, 4, 8, 12, 16})
@@ -153,8 +171,10 @@ func TestParse(t *testing.T) {
 
 // A Prepared that went through MarshalBinary forecasts exactly the same.
 func TestPreparedRoundTrip(t *testing.T) {
-	b, last := builder([]int{0, 4, 8, 12, 16})
-	p := Default().Prepare(b, last, 15)
+	b, last := builder([]int{0, 2, 5, 9, 14})
+	m := Default()
+	m.Members[0].Accel = true
+	p := m.Prepare(b, last, 15)
 	data, err := p.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)

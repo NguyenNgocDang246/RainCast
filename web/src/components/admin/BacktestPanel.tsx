@@ -25,7 +25,7 @@ export function BacktestPanel() {
     if (r.baseline ?? i === 0) return b.baseline;
     if (r.method && b.methods[r.method]) {
       const pairs = r.method === "trec" && r.pairs ? b.pairsSuffix(r.pairs) : "";
-      return b.methods[r.method] + pairs + (r.trend ? b.trendSuffix : "");
+      return b.methods[r.method] + pairs + (r.trend ? b.trendSuffix : "") + (r.accel ? b.accelSuffix : "");
     }
     const m = r.name.match(/^(\d+) cặp( \+ xu hướng)?$/);
     const pairs = r.pairs ?? (m ? Number(m[1]) : 0);

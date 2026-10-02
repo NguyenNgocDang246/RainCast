@@ -101,6 +101,11 @@ func (w *window) field(method string, t int64, pairs int) *motion.Field {
 	return f
 }
 
+// accel is how method's motion for issue time t changed over pairs.
+func (w *window) accel(method string, t int64, pairs int) *motion.Field {
+	return w.motion.Accel(method, t, pairs)
+}
+
 // trend is the intensity growth along field over the last 20 minutes (10
 // when the earlier frame is missing).
 func (w *window) trend(t int64, field *motion.Field) *motion.Trend {

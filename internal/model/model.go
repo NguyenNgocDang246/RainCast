@@ -16,6 +16,9 @@ type Member struct {
 	Method string
 	Pairs  int     // frame pairs its motion averages
 	Weight float64 // relative; weights are normalized over usable members
+	// Accel lets the member's motion keep changing as it did over its
+	// frame pairs (damped), instead of staying as it is now.
+	Accel bool
 }
 
 // Model forecasts by extrapolating the radar along each member's motion and
@@ -74,6 +77,7 @@ func Parse(name string, pairs int, trend bool) (Model, error) {
 type Prepared struct {
 	fields  []*motion.Field
 	trends  []*motion.Trend
+	accels  []*motion.Field // nil for members without acceleration
 	weights []float64
 	// Used is the most frames any member's motion used.
 	Used int
@@ -88,6 +92,7 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 	n := len(m.Members)
 	fields := make([]*motion.Field, n)
 	trends := make([]*motion.Trend, n)
+	accels := make([]*motion.Field, n)
 	used := make([]int, n)
 	var wg sync.WaitGroup
 	for i, mem := range m.Members {
@@ -96,6 +101,9 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 			defer wg.Done()
 			fields[i], used[i] = b.Field(mem.Method, t, mem.Pairs)
 			trends[i] = b.Trend(t, fields[i], rainDBZ)
+			if mem.Accel {
+				accels[i] = b.Accel(mem.Method, t, mem.Pairs)
+			}
 		}()
 	}
 	wg.Wait()
@@ -107,6 +115,7 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 		}
 		p.fields = append(p.fields, f)
 		p.trends = append(p.trends, trends[i])
+		p.accels = append(p.accels, accels[i])
 		p.weights = append(p.weights, m.Members[i].Weight)
 		sum += m.Members[i].Weight
 		p.Used = max(p.Used, used[i])
@@ -133,7 +142,8 @@ func (p *Prepared) HasTrend() bool {
 
 // Forecast is the weighted mean of the members' nowcasts at (x, y): echo,
 // rain probability, arrival times and motion. With trend, each member also
-// grows or weakens echoes along its own motion (opt.Trend is ignored).
+// grows or weakens echoes along its own motion (opt.Trend is ignored), and
+// members with Accel speed up or slow down (opt.Accel is ignored).
 func (p *Prepared) Forecast(g *radar.Grid, x, y float64, opt nowcast.Options, trend bool) nowcast.Result {
 	var series []nowcast.Point
 	var vx, vy float64
@@ -144,6 +154,7 @@ func (p *Prepared) Forecast(g *radar.Grid, x, y float64, opt nowcast.Options, tr
 		if trend {
 			o.Trend = p.trends[i]
 		}
+		o.Accel = p.accels[i]
 		r := nowcast.Forecast(g, f, x, y, o)
 		w := p.weights[i]
 		if series == nil {

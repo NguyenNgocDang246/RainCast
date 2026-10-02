@@ -13,6 +13,8 @@ type preparedWire struct {
 	Fields   []motion.Field
 	Trends   []motion.Trend
 	HasTrend []bool
+	Accels   []motion.Field
+	HasAccel []bool
 	Weights  []float64
 	Used     int
 	Display  motion.Field
@@ -29,6 +31,12 @@ func (p *Prepared) MarshalBinary() ([]byte, error) {
 			t = &motion.Trend{}
 		}
 		w.Trends = append(w.Trends, *t)
+		a := p.accels[i]
+		w.HasAccel = append(w.HasAccel, a != nil)
+		if a == nil {
+			a = &motion.Field{}
+		}
+		w.Accels = append(w.Accels, *a)
 	}
 	if p.Display != nil {
 		w.Display = *p.Display
@@ -52,6 +60,12 @@ func (p *Prepared) UnmarshalBinary(data []byte) error {
 			t = &w.Trends[i]
 		}
 		p.trends = append(p.trends, t)
+		// Entries cached before acceleration existed have no HasAccel.
+		var a *motion.Field
+		if i < len(w.HasAccel) && w.HasAccel[i] {
+			a = &w.Accels[i]
+		}
+		p.accels = append(p.accels, a)
 	}
 	p.Display = &w.Display
 	return nil

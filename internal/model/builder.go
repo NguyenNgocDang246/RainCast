@@ -186,6 +186,35 @@ func (b *Builder) Field(method string, t int64, pairs int) (*motion.Field, int) 
 	panic("model: unknown method " + method)
 }
 
+// Accel is how method's motion at frame t changed over up to pairs frame
+// pairs: the mean of the newer half of the pairs against the older half,
+// which is steadier than comparing two single pairs. nil with fewer than
+// two pairs.
+func (b *Builder) Accel(method string, t int64, pairs int) *motion.Field {
+	times := b.chain(t, pairs)
+	half := (len(times) - 1) / 2
+	if half < 1 {
+		return nil
+	}
+	group := func(from int) (*motion.Field, float64) {
+		fields := make([]*motion.Field, half)
+		var center float64
+		for k := range half {
+			if fields[k] = b.pair(method, times[from+k]); fields[k] == nil {
+				return nil, 0
+			}
+			center += float64(times[from+k]+times[from+k+1]) / 2
+		}
+		return motion.Average(fields...), center / float64(half)
+	}
+	newer, tn := group(0)
+	older, to := group(half)
+	if newer == nil || older == nil {
+		return nil
+	}
+	return motion.Accel(newer, older, (tn-to)/60)
+}
+
 // Trend is the intensity growth along field at frame t, measured over two
 // frames back (20 minutes) or one when that is all there is; nil without
 // an earlier frame.

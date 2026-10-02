@@ -129,3 +129,53 @@ func TestProbability(t *testing.T) {
 		t.Error("DefaultProbRadius should go from 2 to 10 px over an hour")
 	}
 }
+
+// rotation is solid-body rotation about (cx, cy): ω rad/min, sampled per
+// 8-px block so bilinear interpolation stays close to exact.
+func rotation(n int, cx, cy, omega float64) *motion.Field {
+	bs, bw := 8, n/8
+	v := make([]motion.Vector, bw*bw)
+	valid := make([]bool, bw*bw)
+	for by := range bw {
+		for bx := range bw {
+			x, y := (float64(bx)+0.5)*float64(bs)-cx, (float64(by)+0.5)*float64(bs)-cy
+			v[by*bw+bx] = motion.Vector{DX: -omega * y, DY: omega * x}
+			valid[by*bw+bx] = true
+		}
+	}
+	return motion.FromBlocks(bs, bw, bw, v, valid)
+}
+
+// In a rotating field the upstream point stays on the circle; Euler steps
+// spiral outward, midpoint steps do not.
+func TestMidpointFollowsRotation(t *testing.T) {
+	const n, c, rad = 256, 128.0, 60.0
+	f := rotation(n, c, c, 2*math.Pi/120) // a full turn in two hours
+	g := radar.NewGrid(n, n)
+	// Rain only on the circle a quarter turn (30 min) upstream of the target.
+	disc(g, int(c), int(c-rad), 1, 40)
+	r := Forecast(g, f, c+rad, c, Options{Horizon: 30, Threshold: 20})
+	if r.At(30) < 20 {
+		t.Fatalf("rain a quarter turn upstream did not arrive: %v dBZ at 30'", r.At(30))
+	}
+}
+
+// A cell 20 px west moving east at 0.2 px/min arrives at ~100 min; speeding
+// up by 0.01 px/min² (damped, τ = 20) brings it just inside the hour.
+func TestAccelBringsArrivalForward(t *testing.T) {
+	g := radar.NewGrid(128, 128)
+	disc(g, 64-20-3, 64, 3, 40)
+	f := uniformField(motion.Vector{DX: 0.2})
+	steady := Forecast(g, f, 64, 64, Options{Horizon: 60, Threshold: 20})
+	if steady.ArrivalMin != -1 {
+		t.Fatalf("steady arrival = %d, want none within the hour", steady.ArrivalMin)
+	}
+	r := Forecast(g, f, 64, 64, Options{Horizon: 60, Threshold: 20, Accel: uniformField(motion.Vector{DX: 0.01}), AccelTau: 20})
+	// 0.2·m + 0.01·(20m − 400(1−e^(−m/20))) = 20 near m = 59.
+	if r.ArrivalMin < 57 || r.ArrivalMin > 60 {
+		t.Fatalf("arrival with acceleration = %d, want ~59", r.ArrivalMin)
+	}
+	if r.SpeedKmh != steady.SpeedKmh {
+		t.Errorf("reported speed changed with acceleration: %v vs %v", r.SpeedKmh, steady.SpeedKmh)
+	}
+}

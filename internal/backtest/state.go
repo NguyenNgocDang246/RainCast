@@ -118,7 +118,7 @@ func (cfg Config) version() string {
 	h := fnv.New64a()
 	fmt.Fprint(h, "v2", cfg.Leads, cfg.Threshold, cfg.Radius, cfg.TrendTau, cfg.Step, cfg.StepSec)
 	for _, v := range cfg.Variants {
-		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Members, v.Weighting)
+		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Accel, v.Members, v.Weighting)
 	}
 	return fmt.Sprintf("%x", h.Sum64())
 }
