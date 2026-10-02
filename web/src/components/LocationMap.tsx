@@ -26,6 +26,15 @@ const ATTRIBUTION =
   '© <a href="https://openmaptiles.org/" target="_blank" rel="noreferrer">OpenMapTiles</a> ' +
   '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors';
 
+/** Latest RainViewer radar, laid faintly over the map; browsers fetch it directly. */
+const RADAR_INDEX = "https://api.rainviewer.com/public/weather-maps.json";
+const RADAR_OPACITY = 0.4;
+const RADAR_MAX_ZOOM = 7; // rainviewer.MaxZoom; deeper zooms stretch these tiles
+const RADAR_REFRESH_MS = 5 * 60_000;
+const RADAR_ATTRIBUTION = 'Radar <a href="https://www.rainviewer.com/" target="_blank" rel="noreferrer">RainViewer</a>';
+
+type RadarIndex = { host: string; radar: { past: { time: number; path: string }[] } };
+
 /** Same point within ~1 m. */
 const near = (a: { lat: number; lon: number }, b: { lat: number; lon: number }) =>
   Math.abs(a.lat - b.lat) < 1e-5 && Math.abs(a.lon - b.lon) < 1e-5;
@@ -50,6 +59,7 @@ export function LocationMap({ place, onPick }: Props) {
   useEffect(() => {
     let cancelled = false;
     let m: Leaflet.Map | null = null;
+    let radarTimer: ReturnType<typeof setInterval> | undefined;
     // A click that closes the search's open list only closes it. Checked on
     // pointerdown, before the input loses focus.
     const container = el.current;
@@ -68,6 +78,28 @@ export function LocationMap({ place, onPick }: Props) {
         maxZoom: MAX_ZOOM,
         attribution: ATTRIBUTION,
       }).addTo(m);
+      const radar = L.tileLayer("", {
+        opacity: RADAR_OPACITY,
+        maxNativeZoom: RADAR_MAX_ZOOM,
+        maxZoom: MAX_ZOOM,
+        attribution: RADAR_ATTRIBUTION,
+      });
+      const shown = m;
+      const loadRadar = async () => {
+        try {
+          const res = await fetch(RADAR_INDEX, { cache: "no-store" });
+          const idx = (await res.json()) as RadarIndex;
+          const last = idx.radar.past.at(-1);
+          if (cancelled || !last) return;
+          // Color scheme 2, smoothed, no snow.
+          radar.setUrl(`${idx.host}${last.path}/256/{z}/{x}/{y}/2/1_0.png`);
+          if (!shown.hasLayer(radar)) radar.addTo(shown);
+        } catch {
+          // The radar is decoration; the map works without it.
+        }
+      };
+      loadRadar();
+      radarTimer = setInterval(loadRadar, RADAR_REFRESH_MS);
       m.on("click", (e: Leaflet.LeafletMouseEvent) => {
         if (dismissing) {
           dismissing = false;
@@ -82,6 +114,7 @@ export function LocationMap({ place, onPick }: Props) {
     });
     return () => {
       cancelled = true;
+      clearInterval(radarTimer);
       container?.removeEventListener("pointerdown", onDown, { capture: true });
       m?.remove();
       map.current = null;
