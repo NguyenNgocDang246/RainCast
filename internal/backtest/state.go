@@ -24,6 +24,10 @@ type leadAcc struct {
 	NErr       int64
 	Brier      float64 // Σ (p − o)²
 	NBrier     int64
+	// AccumErr is |pred − obs| of the rain accumulated up to this lead (mm,
+	// from the dBZ at every lead so far) where either side has rain.
+	AccumErr float64
+	NAccum   int64
 }
 
 func (a *leadAcc) add(o leadAcc) {
@@ -35,6 +39,8 @@ func (a *leadAcc) add(o leadAcc) {
 	a.NErr += o.NErr
 	a.Brier += o.Brier
 	a.NBrier += o.NBrier
+	a.AccumErr += o.AccumErr
+	a.NAccum += o.NAccum
 }
 
 // block holds one region's scores over six hours: [variant][lead].

@@ -17,6 +17,8 @@ export type Forecast = {
   /** Where the rain is heading, clockwise from north. */
   direction_deg: number;
   motion_reliable: boolean;
+  /** Rain expected over the 60 minutes after frame_time, in mm (estimated from radar). */
+  accum_mm?: number;
 };
 
 export type Place = { name: string; address: string; lat: number; lon: number };

@@ -83,6 +83,7 @@ export function BacktestPanel() {
                   <th className={th}>{b.delta}</th>
                   <th className={th}>{b.bss}</th>
                   <th className={th}>{b.auc}</th>
+                  <th className={th}>{b.accum}</th>
                   <th className={th}>{b.ms}</th>
                 </tr>
               </thead>
@@ -115,6 +116,7 @@ export function BacktestPanel() {
                       </td>
                       <td className={td}>{num(r.bss)}</td>
                       <td className={td}>{num(r.auc)}</td>
+                      <td className={td}>{num(r.accum_mae_mm)}</td>
                       <td className={td}>
                         {r.ms_per_issue == null ? "–" : Math.round(r.ms_per_issue)}
                       </td>

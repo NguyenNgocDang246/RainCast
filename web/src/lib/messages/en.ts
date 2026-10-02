@@ -59,6 +59,7 @@ export const en: Dict = {
 
   forecast: {
     radarAt: (clock) => `Radar at ${clock}`,
+    accum: (mm) => `About ${mm} mm of rain expected over the next hour`,
     moving: (dir, kmh) => ` · rain moving ${dir}, ${kmh} km/h`,
     about: (clock) => `Around ${clock}`,
 
@@ -173,11 +174,12 @@ export const en: Dict = {
       delta: "Δ vs TREC 4 pairs",
       bss: "BSS",
       auc: "AUC",
+      accum: "mm/h ±",
       ms: "ms/run",
       better: "surely better",
       worse: "surely worse",
       intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
-      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). ms/run: rough compute time. “+ trend” adds rain growing or weakening; “+ acceleration” lets rain keep speeding up or slowing down as it just did. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
+      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening; “+ acceleration” lets rain keep speeding up or slowing down as it just did. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
     },
 
     history: {

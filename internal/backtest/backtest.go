@@ -104,6 +104,9 @@ type LeadScore struct {
 	Scores  verify.Scores `json:"scores"`
 	MAEdBZ  *float64      `json:"mae_dbz"` // over samples where either side had rain
 	Brier   *float64      `json:"brier"`
+	// AccumMAE is the mean |pred − obs| rain accumulated up to this lead,
+	// in mm, both sides from radar through radar.RainRate.
+	AccumMAE *float64 `json:"accum_mae_mm,omitempty"`
 }
 
 // Interval is a 95% bootstrap confidence interval.
@@ -135,10 +138,13 @@ type Result struct {
 	// Probability scores: Brier (lower is better), its skill against
 	// persistence, the Brier after calibration learned on the other half
 	// of the data, and the area under the ROC curve.
-	Brier       *float64 `json:"brier,omitempty"`
-	BSS         *float64 `json:"bss,omitempty"`
-	BrierCal    *float64 `json:"brier_cal,omitempty"`
-	AUC         *float64 `json:"auc,omitempty"`
+	Brier    *float64 `json:"brier,omitempty"`
+	BSS      *float64 `json:"bss,omitempty"`
+	BrierCal *float64 `json:"brier_cal,omitempty"`
+	AUC      *float64 `json:"auc,omitempty"`
+	// AccumMAE is LeadScore.AccumMAE at the last lead: the error in the
+	// hour's rain total.
+	AccumMAE    *float64 `json:"accum_mae_mm,omitempty"`
 	Reliability []RelBin `json:"reliability,omitempty"`
 	MsPerIssue  float64  `json:"ms_per_issue"`
 }

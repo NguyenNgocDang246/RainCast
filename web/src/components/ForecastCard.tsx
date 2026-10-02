@@ -41,6 +41,9 @@ export function ForecastCard({ forecast: f, now }: Props) {
         <p className={`text-sm font-medium uppercase tracking-widest ${accent}`}>{v.status}</p>
         <h1 className="mt-3 text-3xl font-semibold leading-tight text-slate-50 sm:text-4xl">{v.headline}</h1>
         {v.detail && <p className="mt-3 text-slate-400">{v.detail}</p>}
+        {v.tone !== "dry" && (f.accum_mm ?? 0) >= 0.1 && (
+          <p className="mt-2 text-sm text-slate-400">{t.forecast.accum(mm(f.accum_mm ?? 0, locale))}</p>
+        )}
         <p className="mt-6 text-xs text-slate-500">
           {t.forecast.radarAt(clock(frameMs, locale))}
           {/* Motion is of the echoes nearby; with no rain coming it only confuses. */}
@@ -117,6 +120,11 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     };
   }
   return { tone: "dry", scene: "clear", status: s.dry, headline: s.noRain, detail: s.noRainDetail };
+}
+
+/** Rain totals to a sensible precision: radar estimates are rough. */
+function mm(v: number, locale: string) {
+  return v.toLocaleString(locale, { maximumFractionDigits: v < 10 ? 1 : 0 });
 }
 
 function Minutes({ text }: { text: string }) {

@@ -65,6 +65,8 @@ export type BacktestResult = {
   bss?: number;
   brier_cal?: number;
   auc?: number;
+  /** Mean error of the hour's rain total against radar, mm. */
+  accum_mae_mm?: number;
   ms_per_issue?: number;
 };
 

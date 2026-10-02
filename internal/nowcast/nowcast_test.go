@@ -179,3 +179,16 @@ func TestAccelBringsArrivalForward(t *testing.T) {
 		t.Errorf("reported speed changed with acceleration: %v vs %v", r.SpeedKmh, steady.SpeedKmh)
 	}
 }
+
+// 40 dBZ (≈ 11.5 mm/h) for half an hour is ≈ 5.8 mm.
+func TestAccumulation(t *testing.T) {
+	g := radar.NewGrid(128, 128)
+	disc(g, 64, 64, 40, 40)
+	r := Forecast(g, uniformField(motion.Vector{}), 64, 64, Options{Horizon: 30, Threshold: 20})
+	if math.Abs(r.AccumMM-radar.RainRate(40)/2) > 1e-9 || math.Abs(r.AccumMM-5.75) > 0.1 {
+		t.Fatalf("accum = %.2f mm, want ≈ 5.75", r.AccumMM)
+	}
+	if d := Forecast(radar.NewGrid(64, 64), nil, 32, 32, Options{Horizon: 60, Threshold: 20}); d.AccumMM != 0 {
+		t.Fatalf("dry accum = %v", d.AccumMM)
+	}
+}

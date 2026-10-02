@@ -61,6 +61,7 @@ export const vi = {
 
   forecast: {
     radarAt: (clock: string) => `Radar lúc ${clock}`,
+    accum: (mm: string) => `Lượng mưa ước tính khoảng ${mm} mm trong 1 giờ tới`,
     moving: (dir: string, kmh: string) => ` · mưa đang di chuyển về hướng ${dir}, ${kmh} km/h`,
     about: (clock: string) => `Khoảng ${clock}`,
 
@@ -177,11 +178,12 @@ export const vi = {
       delta: "Δ so với TREC 4 cặp",
       bss: "BSS",
       auc: "AUC",
+      accum: "mm/giờ ±",
       ms: "ms/lần",
       better: "chắc chắn tốt hơn",
       worse: "chắc chắn kém hơn",
       intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
-      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi; “+ gia tốc” cho mưa tiếp tục nhanh/chậm dần như vừa qua. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
+      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi; “+ gia tốc” cho mưa tiếp tục nhanh/chậm dần như vừa qua. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
     },
 
     history: {

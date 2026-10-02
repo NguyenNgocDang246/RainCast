@@ -62,6 +62,9 @@ type Result struct {
 	SpeedKmh       float64 `json:"speed_kmh"`
 	DirectionDeg   float64 `json:"direction_deg"`
 	MotionReliable bool    `json:"motion_reliable"`
+	// AccumMM is the rain expected over the horizon, in mm, from the
+	// series through radar.RainRate.
+	AccumMM float64 `json:"accum_mm"`
 }
 
 // ProbAt returns the rain probability at minute m (clamped to the series).
@@ -152,10 +155,14 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 }
 
 // Summarize fills a result's arrival times from its series: the first
-// minute at or above opt.Threshold (rain) and opt.Heavy (heavy rain).
+// minute at or above opt.Threshold (rain) and opt.Heavy (heavy rain); and
+// the accumulated rain, each minute after the first adding a minute of it.
 func Summarize(series []Point, opt Options) Result {
 	r := Result{Series: series, ArrivalMin: -1, HeavyArrivalMin: -1}
-	for _, pt := range series {
+	for i, pt := range series {
+		if i > 0 {
+			r.AccumMM += radar.RainRate(pt.DBZ) / 60
+		}
 		if pt.DBZ >= opt.Threshold && r.ArrivalMin < 0 {
 			r.ArrivalMin = pt.Minute
 		}

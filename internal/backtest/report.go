@@ -68,7 +68,11 @@ func results(cfg Config, acc [][]leadAcc, nanos []int64, issues int) []Result {
 			a := acc[v][li]
 			all.add(a)
 			out[v].Leads = append(out[v].Leads, LeadScore{LeadMin: l, Scores: scores(a),
-				MAEdBZ: ratio(a.AbsErr, float64(a.NErr)), Brier: ratio(a.Brier, float64(a.NBrier))})
+				MAEdBZ: ratio(a.AbsErr, float64(a.NErr)), Brier: ratio(a.Brier, float64(a.NBrier)),
+				AccumMAE: ratio(a.AccumErr, float64(a.NAccum))})
+		}
+		if n := len(out[v].Leads); n > 0 {
+			out[v].AccumMAE = out[v].Leads[n-1].AccumMAE
 		}
 		out[v].Overall = scores(all)
 		out[v].Brier = ratio(all.Brier, float64(all.NBrier))

@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"testing"
 
@@ -125,5 +126,17 @@ func TestNoRainNextToBand(t *testing.T) {
 	x, y := gx-101*256, gy-60*256
 	if v := g.MedianInRadius(x, y, 2); v >= 20 {
 		t.Fatalf("median = %v dBZ, want < 20 (no rain)", v)
+	}
+}
+
+func TestRainRate(t *testing.T) {
+	cases := []struct {
+		dbz  float32
+		want float64
+	}{{10, 0}, {20, 0.65}, {40, 11.5}, {55, 100}, {65, 100}}
+	for _, c := range cases {
+		if got := RainRate(c.dbz); math.Abs(got-c.want) > 0.02*c.want+1e-9 {
+			t.Errorf("RainRate(%v) = %.3f mm/h, want ≈ %.3f", c.dbz, got, c.want)
+		}
 	}
 }

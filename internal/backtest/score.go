@@ -172,6 +172,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 			}
 		}
 
+		addAccum(b.Acc, fc, obs, cfg.Leads)
 		for v := range nVar {
 			for li := range cfg.Leads {
 				a := &b.Acc[v][li]
@@ -222,6 +223,28 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 	}
 	rs.Skipped = w.skipped
 	return st, nil
+}
+
+// addAccum scores the rain each variant accumulates up to every lead
+// against what radar showed, each lead standing for the minutes since the
+// one before.
+func addAccum(acc [][]leadAcc, fc []forecast, obs [][]float32, leads []int) {
+	for v := range fc {
+		for p := range obs[0] {
+			var pred, seen float64
+			prev := 0
+			for li, l := range leads {
+				h := float64(l-prev) / 60
+				prev = l
+				pred += radar.RainRate(fc[v].dbz[li][p]) * h
+				seen += radar.RainRate(obs[li][p]) * h
+				if pred > 0 || seen > 0 {
+					acc[v][li].AccumErr += math.Abs(pred - seen)
+					acc[v][li].NAccum++
+				}
+			}
+		}
+	}
 }
 
 // nowcastField wraps a possibly nil field (persistence has none).

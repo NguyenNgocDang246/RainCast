@@ -138,7 +138,7 @@ func printReport(rep backtest.Report, out string) error {
 // and cost.
 func printSummary(rep backtest.Report) {
 	fmt.Printf("Tổng hợp (so với %s; khoảng tin cậy 95%% từ %d khối 6 giờ)\n", rep.Reference, rep.Blocks)
-	fmt.Printf("  %-28s%16s%20s%8s%8s%8s%9s\n", "", "CSI [95%]", "Δ CSI [95%]", "BSS", "BSS hc", "AUC", "ms/lần")
+	fmt.Printf("  %-28s%16s%20s%8s%8s%8s%9s%9s\n", "", "CSI [95%]", "Δ CSI [95%]", "BSS", "BSS hc", "AUC", "mm 60'", "ms/lần")
 	for _, r := range rep.Results {
 		csi := pct(r.Overall.CSI)
 		if r.CSICI != nil {
@@ -156,9 +156,10 @@ func printSummary(rep backtest.Report) {
 			v := 1 - *r.BrierCal / *rep.Results[0].Brier
 			bssCal = &v
 		}
-		fmt.Printf("  %-28s%16s%20s%8s%8s%8s%9.0f\n", r.Name, csi, delta, num(r.BSS), num(bssCal), num(r.AUC), r.MsPerIssue)
+		fmt.Printf("  %-28s%16s%20s%8s%8s%8s%9s%9.0f\n", r.Name, csi, delta, num(r.BSS), num(bssCal), num(r.AUC), num(r.AccumMAE), r.MsPerIssue)
 	}
 	fmt.Println("  BSS: kỹ năng xác suất so với giữ nguyên (càng cao càng tốt); hc: sau hiệu chỉnh.")
+	fmt.Println("  mm 60': sai số tuyệt đối trung bình lượng mưa 1 giờ so với radar (càng thấp càng tốt).")
 	fmt.Println()
 }
 
