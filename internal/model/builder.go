@@ -59,6 +59,13 @@ func (c *Cache) Evict(before int64) {
 	}
 }
 
+// Len is the number of cached pairs.
+func (c *Cache) Len() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.pairs)
+}
+
 func (c *Cache) get(k pairKey) (*motion.Field, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()

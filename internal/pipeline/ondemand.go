@@ -51,6 +51,20 @@ func regionCorner(gx, gy float64) (int, int) {
 	return corner(gx), corner(gy)
 }
 
+// maxMotionCaches bounds the per-tile-block motion caches (each holds a few
+// small block-grid fields per method).
+const maxMotionCaches = 64
+
+// tileKey identifies a 2×2 tile block across frames.
+type tileKey struct{ TX, TY int }
+
+// motionCache keeps a tile block's per-pair motion between frames: when a
+// new frame arrives only its pair is estimated, not every pair again.
+type motionCache struct {
+	cache *model.Cache
+	used  int64 // newest frame it served
+}
+
 // region is the newest mosaic around a point plus the model's motion for
 // it, shared by every point on the same side of the same tile.
 type region struct {
@@ -124,23 +138,71 @@ func (p *Pipeline) buildRegion(ctx context.Context, key regionKey, host string, 
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
-	b := p.builder(history, func(t int64) *radar.Mosaic { return grids[t] }, model.NewCache())
+	start := time.Now()
+	// Pairs end at history[1:]; the one ending at history[0] has no
+	// earlier frame here. len(history) ≥ 2: ForecastAt checks frames.
+	oldest := history[1].Time
+	cache := p.motionFor(key.TX, key.TY, key.Frame, oldest)
+	cache.Evict(oldest)
+	reused := cache.Len()
+	b := p.builder(history, func(t int64) *radar.Mosaic { return grids[t] }, cache)
 	prep := p.cfg.Model.Prepare(b, key.Frame, p.cfg.Threshold-5)
 	if prep == nil {
 		return nil, fmt.Errorf("pipeline: frames too far apart to estimate motion")
 	}
+	p.log.Debug("region built", "tx", key.TX, "ty", key.TY, "pairs_reused", reused,
+		"pairs_estimated", cache.Len()-reused, "dur", time.Since(start))
 	r := &region{cur: grids[key.Frame], prep: prep, frame: key.Frame}
 	p.putRegion(key, r)
 	return r, nil
 }
 
-// putRegion caches r, dropping regions from older frames and capping size.
+// motionFor returns the motion cache of the tile block at (tx, ty), marking
+// it used by frame. Caches unused since before oldest (the earliest frame a
+// forecast now reads) hold nothing useful and are dropped, and the oldest go
+// first beyond maxMotionCaches.
+func (p *Pipeline) motionFor(tx, ty int, frame, oldest int64) *model.Cache {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	k := tileKey{tx, ty}
+	mc, ok := p.motion[k]
+	if !ok {
+		mc = &motionCache{cache: model.NewCache()}
+		p.motion[k] = mc
+	}
+	mc.used = max(mc.used, frame)
+	for k, c := range p.motion {
+		if c.used < oldest {
+			delete(p.motion, k)
+		}
+	}
+	for len(p.motion) > maxMotionCaches {
+		var stale tileKey
+		first := true
+		for k, c := range p.motion {
+			if first || c.used < p.motion[stale].used {
+				stale, first = k, false
+			}
+		}
+		delete(p.motion, stale)
+	}
+	return mc.cache
+}
+
+// putRegion caches r, dropping regions from older frames and, when full,
+// one more to make room.
 func (p *Pipeline) putRegion(key regionKey, r *region) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for k := range p.regions {
-		if k.Frame != key.Frame || len(p.regions) >= maxRegions {
+		if k.Frame != key.Frame {
 			delete(p.regions, k)
+		}
+	}
+	if _, ok := p.regions[key]; !ok && len(p.regions) >= maxRegions {
+		for k := range p.regions {
+			delete(p.regions, k)
+			break
 		}
 	}
 	p.regions[key] = r

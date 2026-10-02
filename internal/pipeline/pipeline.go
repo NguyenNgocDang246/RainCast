@@ -113,6 +113,7 @@ type Pipeline struct {
 	host    string             // tile host from the latest index
 	frames  []rainviewer.Frame // latest index, ascending
 	regions map[regionKey]*region
+	motion  map[tileKey]*motionCache
 	flight  singleflight.Group
 
 	started  time.Time
@@ -123,7 +124,7 @@ type Pipeline struct {
 
 // New builds a pipeline. cfg.Stations must not be empty.
 func New(cfg Config, client *rainviewer.Client, log *slog.Logger) *Pipeline {
-	return &Pipeline{cfg: cfg, client: client, log: log, regions: map[regionKey]*region{}, started: time.Now()}
+	return &Pipeline{cfg: cfg, client: client, log: log, regions: map[regionKey]*region{}, motion: map[tileKey]*motionCache{}, started: time.Now()}
 }
 
 // Primary is the first station, where address search is biased toward.
