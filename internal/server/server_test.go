@@ -22,6 +22,13 @@ func (f *fakeSource) Ready() bool { return !f.notLoaded }
 
 func (f *fakeSource) Status() pipeline.Status { return pipeline.Status{Ticks: 3} }
 
+func (f *fakeSource) Radar() (pipeline.RadarFrame, bool) {
+	if f.notLoaded {
+		return pipeline.RadarFrame{}, false
+	}
+	return pipeline.RadarFrame{TileURL: "https://tiles/x/{z}/{x}/{y}.png", MaxZoom: 7}, true
+}
+
 func (f *fakeSource) ForecastAt(_ context.Context, lat, lon float64) (*pipeline.Snapshot, error) {
 	if f.notLoaded {
 		return nil, pipeline.ErrNotReady
@@ -146,5 +153,19 @@ func TestTileEndpoint(t *testing.T) {
 		if rec := do(t, h, path); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: %d", path, rec.Code)
 		}
+	}
+}
+
+func TestRadarEndpoint(t *testing.T) {
+	src := &fakeSource{notLoaded: true}
+	h := New(src, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{HorizonMin: 60})
+	if rec := do(t, h, "/api/radar"); rec.Code != http.StatusServiceUnavailable {
+		t.Errorf("before the frame index loads: %d", rec.Code)
+	}
+	src.notLoaded = false
+	rec := do(t, h, "/api/radar")
+	var f pipeline.RadarFrame
+	if err := json.NewDecoder(rec.Body).Decode(&f); err != nil || rec.Code != http.StatusOK || f.MaxZoom != 7 || f.TileURL == "" {
+		t.Errorf("%d %+v %v", rec.Code, f, err)
 	}
 }

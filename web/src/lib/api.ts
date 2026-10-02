@@ -57,3 +57,10 @@ export function suggest(query: string, near: Pick<Place, "lat" | "lon"> | null, 
   const bias = near ? `&lat=${near.lat}&lon=${near.lon}` : "";
   return getJSON<Place[]>(`/api/suggest?q=${encodeURIComponent(query)}${bias}`, signal);
 }
+
+/** The radar frame forecasts start from, as a Leaflet tile URL template. */
+export type RadarFrame = { time: string; tile_url: string; max_zoom: number };
+
+export function fetchRadar(): Promise<RadarFrame> {
+  return getJSON<RadarFrame>("/api/radar");
+}

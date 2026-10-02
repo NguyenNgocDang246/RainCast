@@ -24,6 +24,7 @@ type Source interface {
 	Ready() bool
 	ForecastAt(ctx context.Context, lat, lon float64) (*pipeline.Snapshot, error)
 	Status() pipeline.Status
+	Radar() (pipeline.RadarFrame, bool)
 }
 
 // Geocoder turns an address, coordinates or a map link into places, names
@@ -71,6 +72,7 @@ func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config
 	mux.HandleFunc("GET /api/suggest", s.suggest)
 	mux.HandleFunc("GET /api/reverse", s.reverse)
 	mux.HandleFunc("GET /api/tiles/{z}/{x}/{y}", s.tile)
+	mux.HandleFunc("GET /api/radar", s.radar)
 	s.routeAdmin(mux)
 	return s.logging(s.cors(mux))
 }
@@ -199,6 +201,18 @@ func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "public, max-age=2592000")
 		w.Write(b)
 	}
+}
+
+// radar names the newest radar frame for the map. Browsers fetch its tiles
+// from RainViewer themselves, so map views don't spend the server's quota.
+func (s *Server) radar(w http.ResponseWriter, r *http.Request) {
+	f, ok := s.src.Radar()
+	if !ok {
+		writeError(w, http.StatusServiceUnavailable, "radar data is still loading; try again shortly")
+		return
+	}
+	w.Header().Set("Cache-Control", "public, max-age=60")
+	writeJSON(w, http.StatusOK, f)
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {

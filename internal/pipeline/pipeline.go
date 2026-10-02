@@ -173,6 +173,30 @@ func (p *Pipeline) Status() Status {
 	return st
 }
 
+// RadarFrame is the newest radar frame, for drawing on a map.
+type RadarFrame struct {
+	Time    time.Time `json:"time"`
+	TileURL string    `json:"tile_url"` // Leaflet {z}/{x}/{y} template
+	MaxZoom int       `json:"max_zoom"`
+}
+
+// Radar returns the newest frame, the one forecasts start from; false
+// before the frame index loads.
+func (p *Pipeline) Radar() (RadarFrame, bool) {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	n := len(p.frames)
+	if n == 0 {
+		return RadarFrame{}, false
+	}
+	f := p.frames[n-1]
+	return RadarFrame{
+		Time:    time.Unix(f.Time, 0).UTC(),
+		TileURL: rainviewer.MapTileTemplate(p.host, f.Path),
+		MaxZoom: rainviewer.MaxZoom,
+	}, true
+}
+
 // Run refreshes the frame index immediately and then every interval until
 // ctx is done.
 func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {

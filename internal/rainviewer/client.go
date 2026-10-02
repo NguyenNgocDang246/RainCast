@@ -182,6 +182,12 @@ func TileURL(host, path string, t Tile) string {
 	return fmt.Sprintf("%s%s/256/%d/%d/%d%s", host, path, t.Z, t.X, t.Y, tileSuffix)
 }
 
+// MapTileTemplate is a Leaflet {z}/{x}/{y} URL for drawing a frame on a map:
+// smoothed, unlike the tiles the forecast reads.
+func MapTileTemplate(host, path string) string {
+	return host + path + "/256/{z}/{x}/{y}/2/1_0.png"
+}
+
 // FetchTile downloads one tile, reading from and writing to the disk cache.
 // Frame paths are immutable, so a cached tile never goes stale.
 func (c *Client) FetchTile(ctx context.Context, host, path string, t Tile) ([]byte, error) {
