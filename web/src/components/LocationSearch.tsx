@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from "react";
 import { geocode, suggest, type Place } from "@/lib/api";
 import { errorText, useLocale } from "@/lib/i18n";
 import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
+import { LocateIcon } from "./icons";
 
 type Props = {
   onSelect: (place: Place) => void;
@@ -11,6 +12,9 @@ type Props = {
   value: Place | null;
   /** Suggestions near this point rank first (usually the current place). */
   near: Place | null;
+  /** Asks the browser for the user's position. */
+  onLocate: () => void;
+  locating: boolean;
 };
 
 const DEBOUNCE_MS = 300;
@@ -28,7 +32,7 @@ type Item = { kind: "place" | "recent"; place: Place };
 
 const placeKey = (p: Place | null) => (p ? `${p.lat},${p.lon},${p.name}` : "");
 
-export function LocationSearch({ onSelect, value, near }: Props) {
+export function LocationSearch({ onSelect, value, near, onLocate, locating }: Props) {
   const { t } = useLocale();
   const listId = useId();
   const [query, setQuery] = useState(value?.name ?? "");
@@ -149,7 +153,7 @@ export function LocationSearch({ onSelect, value, near }: Props) {
   };
 
   return (
-    <div className="relative w-full max-w-xl">
+    <div className="relative w-full">
       <form onSubmit={submit} className="flex gap-2" role="search">
         <input
           type="search"
@@ -180,18 +184,28 @@ export function LocationSearch({ onSelect, value, near }: Props) {
           aria-controls={listId}
           aria-activedescendant={showList && active >= 0 ? `${listId}-${active}` : undefined}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+          className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/30 px-4 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none [&::-webkit-search-cancel-button]:cursor-pointer"
         />
+        <button
+          type="button"
+          onClick={onLocate}
+          disabled={locating}
+          title={t.locate.button}
+          aria-label={t.locate.button}
+          className="grid w-12 shrink-0 cursor-pointer place-items-center rounded-xl border border-slate-800 bg-slate-900 text-sky-400 shadow-lg shadow-black/30 transition hover:border-sky-500 hover:text-sky-300 disabled:cursor-wait"
+        >
+          <LocateIcon className={`size-5 ${locating ? "animate-spin" : ""}`} />
+        </button>
         <button
           type="submit"
           disabled={busy || !editing}
-          className="rounded-xl bg-sky-500 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          className="rounded-xl bg-sky-500 shadow-lg shadow-black/30 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed"
         >
           {busy ? t.search.busy : t.search.submit}
         </button>
       </form>
 
-      {error && <p className="mt-2 text-sm text-amber-300">{errorText(t, error)}</p>}
+      {error && <p className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-amber-300 shadow-lg">{errorText(t, error)}</p>}
 
       {showList && (
         <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">

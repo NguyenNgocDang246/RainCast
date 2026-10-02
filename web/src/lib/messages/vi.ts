@@ -26,30 +26,31 @@ export const vi = {
   } as Record<string, string>,
 
   dashboard: {
-    unselect: "Bỏ chọn",
     loading: "Đang xem radar…",
     footerAddress: "Địa chỉ & bản đồ",
   },
 
   intro: {
-    heading: "Mưa còn bao lâu nữa tới chỗ bạn?",
+    /** The middle part is highlighted. */
+    heading: ["Mưa còn ", "bao lâu nữa", " tới chỗ bạn?"],
     lead: "Xem trước cơn mưa trong một giờ tới, ngay tại nơi bạn đứng.",
-    address: "Địa chỉ",
-    addressExample: "Chợ Bến Thành, Quận 1",
-    mapsLink: "Link Google Maps",
-    mapsLinkExample: "Sao chép đường liên kết",
-    coords: "Tọa độ",
-    map: "Bản đồ",
-    mapExample: "Bấm vào điểm bất kỳ",
   },
 
   map: {
     label: "Bản đồ chọn vị trí",
-    hint: "Bấm vào bản đồ hoặc kéo ghim để chọn điểm",
+  },
+
+  locate: {
+    cta: "Dùng vị trí của tôi",
+    button: "Vị trí của tôi",
+    busy: "Đang lấy vị trí…",
+    denied: "Trình duyệt đang chặn quyền vị trí. Hãy cho phép trong cài đặt, hoặc tìm theo địa chỉ.",
+    failed: "Không lấy được vị trí. Thử lại hoặc tìm theo địa chỉ.",
+    insecure: "Trình duyệt chỉ cho lấy vị trí trên trang https. Hãy tìm theo địa chỉ.",
   },
 
   search: {
-    placeholder: "Địa chỉ, link Google Maps hoặc tọa độ",
+    placeholder: "Tìm kiếm",
     label: "Tìm vị trí",
     submit: "Tìm",
     busy: "Đang tìm…",
@@ -87,6 +88,7 @@ export const vi = {
 
     dry: "Trời tạm ổn",
     noRain: "Không mưa trong 60 phút tới",
+    noRainDetail: "Radar chưa thấy cơn mưa nào đang tiến về chỗ bạn",
   },
 
   admin: {

@@ -102,7 +102,14 @@ export function Dashboard() {
   const forecast = current?.forecast ?? null;
   const error = current?.error ?? null;
 
-  const select = savePlace;
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
+
+  /** Choosing any place clears a failed locate attempt. */
+  const select = (p: Place | null) => {
+    setLocateError(null);
+    savePlace(p);
+  };
 
   /** A point from the map is used at once, then named when the lookup returns. */
   const pickOnMap = async (pointLat: number, pointLon: number) => {
@@ -131,41 +138,73 @@ export function Dashboard() {
     }
   };
 
+  /** Uses the browser's position like a point picked on the map. */
+  const locate = () => {
+    if (!("geolocation" in navigator)) {
+      setLocateError(t.locate.failed);
+      return;
+    }
+    // Browsers only share the position with https pages (and localhost).
+    if (!window.isSecureContext) {
+      setLocateError(t.locate.insecure);
+      return;
+    }
+    setLocating(true);
+    setLocateError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        pickOnMap(pos.coords.latitude, pos.coords.longitude);
+      },
+      (err) => {
+        setLocating(false);
+        setLocateError(err.code === err.PERMISSION_DENIED ? t.locate.denied : t.locate.failed);
+      },
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+    );
+  };
+
+  // Google Maps layout: the map fills the screen above a thin footer; search
+  // and results float over it (left column on wide screens, bottom sheet on phones).
   return (
-    <main className="flex flex-1 flex-col items-center px-4 py-10">
-      <LanguageSwitch title="title" />
-      <LocationSearch onSelect={select} value={place ?? null} near={place ?? null} />
-      <LocationMap place={place ?? null} onPick={pickOnMap} />
+    <main className="flex h-dvh flex-col overflow-hidden">
+      <div className="relative flex-1">
+        <LocationMap place={place ?? null} onPick={pickOnMap} />
+        <LanguageSwitch title="title" />
 
-      {place && (
-        <p className="mt-4 text-sm text-slate-400">
-          <span className="text-slate-200">{place.name}</span>
-          <button
-            type="button"
-            onClick={() => select(null)}
-            className="ml-3 text-sky-400 hover:underline cursor-pointer"
-          >
-            {t.dashboard.unselect}
-          </button>
-        </p>
-      )}
+        <div className="pointer-events-none absolute inset-x-0 top-0 bottom-0 z-10 flex flex-col justify-between gap-3 p-3 sm:inset-x-auto sm:left-0 sm:w-md sm:justify-start sm:p-4">
+          <div className="pointer-events-auto mr-20 sm:mr-0">
+            <LocationSearch
+              onSelect={select}
+              value={place ?? null}
+              near={place ?? null}
+              onLocate={locate}
+              locating={locating}
+            />
+          </div>
 
-      <div className="flex w-full flex-1 flex-col items-center justify-center py-12">
-        {place === null && <Intro />}
-        {place && forecast && <ForecastCard forecast={forecast} now={now} />}
-        {place && !forecast && !error && (
-          <p className="animate-pulse text-slate-500" aria-busy="true">
-            {t.dashboard.loading}
-          </p>
-        )}
-        {place && error && (
-          <p className="mt-8 max-w-md text-center text-sm text-amber-300">{errorText(t, error)}</p>
-        )}
+          <section className="pointer-events-auto max-h-[45dvh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/95 p-5 shadow-2xl shadow-black/40 backdrop-blur sm:max-h-none sm:min-h-0">
+            {locateError && <p className="mb-4 text-sm text-amber-300">{locateError}</p>}
+            {place === null && <Intro onLocate={locate} locating={locating} />}
+            {place && forecast && <ForecastCard forecast={forecast} now={now} />}
+            {place && !forecast && !error && (
+              <p className="animate-pulse text-slate-500" aria-busy="true">
+                {t.dashboard.loading}
+              </p>
+            )}
+            {place && error && <p className="text-sm text-amber-300">{errorText(t, error)}</p>}
+          </section>
+        </div>
       </div>
 
-      <footer className="text-center text-xs text-slate-600">
+      <footer className="shrink-0 border-t border-slate-800 px-4 py-1.5 text-center text-xs text-slate-600">
         Radar: RainViewer · {t.dashboard.footerAddress}:{" "}
-        <a href="https://www.geoapify.com/" className="hover:text-slate-400" target="_blank" rel="noreferrer">
+        <a
+          href="https://www.geoapify.com/"
+          className="hover:text-slate-400"
+          target="_blank"
+          rel="noreferrer"
+        >
           Geoapify
         </a>
         , ©{" "}

@@ -30,7 +30,7 @@ export function LanguageSwitch({ title }: { title: "title" | "adminTitle" }) {
   }, [locale, docTitle]);
 
   return (
-    <div className="absolute right-4 top-4 z-20 flex gap-1 text-xs" role="group" aria-label={t.language.label}>
+    <div className="absolute right-4 top-4 z-20 flex gap-1 rounded-lg bg-slate-950/90 p-1 text-xs shadow-lg" role="group" aria-label={t.language.label}>
       {OPTIONS.map((o) => (
         <button
           key={o.value}

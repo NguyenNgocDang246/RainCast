@@ -2,10 +2,20 @@ import type { Forecast } from "@/lib/api";
 import { clock, compass, dropsBelow, peakFrom } from "@/lib/format";
 import { useLocale } from "@/lib/i18n";
 import type { Dict } from "@/lib/messages/vi";
+import { WeatherBackdrop, type Glow, type Scene } from "./WeatherBackdrop";
 
 type Props = { forecast: Forecast; now: number };
 
-type View = { tone: "dry" | "light" | "heavy"; status: string; headline: React.ReactNode; detail?: string };
+type View = {
+  tone: "dry" | "light" | "heavy";
+  /** The backdrop: the weather now, or what is coming when it is dry. */
+  scene: Scene;
+  /** Heavy rain coming tints a lighter scene rose. */
+  heavySoon?: boolean;
+  status: string;
+  headline: React.ReactNode;
+  detail?: string;
+};
 
 /**
  * Answers one question: when does it rain — or, if it is already drizzling,
@@ -22,20 +32,24 @@ export function ForecastCard({ forecast: f, now }: Props) {
   const v = view(f, t, fromNow, at);
 
   const accent = { dry: "text-emerald-400", light: "text-sky-400", heavy: "text-rose-400" }[v.tone];
+  const glow: Glow = v.tone === "heavy" || v.heavySoon ? "rose" : v.tone === "dry" ? "emerald" : "sky";
 
   return (
-    <section className="w-full max-w-xl text-center">
-      <p className={`text-sm font-medium uppercase tracking-widest ${accent}`}>{v.status}</p>
-      <h1 className="mt-3 text-4xl font-semibold leading-tight text-slate-50 sm:text-6xl">{v.headline}</h1>
-      {v.detail && <p className="mt-4 text-lg text-slate-400">{v.detail}</p>}
-      <p className="mt-10 text-xs text-slate-500">
-        {t.forecast.radarAt(clock(frameMs, locale))}
-        {/* Motion is of the echoes nearby; with no rain coming it only confuses. */}
-        {v.tone !== "dry" &&
-          f.motion_reliable &&
-          f.speed_kmh >= 1 &&
-          t.forecast.moving(compass(f.direction_deg, locale), f.speed_kmh.toFixed(0))}
-      </p>
+    <section className="relative w-full">
+      <WeatherBackdrop scene={v.scene} glow={glow} />
+      <div className="relative">
+        <p className={`text-sm font-medium uppercase tracking-widest ${accent}`}>{v.status}</p>
+        <h1 className="mt-3 text-3xl font-semibold leading-tight text-slate-50 sm:text-4xl">{v.headline}</h1>
+        {v.detail && <p className="mt-3 text-slate-400">{v.detail}</p>}
+        <p className="mt-6 text-xs text-slate-500">
+          {t.forecast.radarAt(clock(frameMs, locale))}
+          {/* Motion is of the echoes nearby; with no rain coming it only confuses. */}
+          {v.tone !== "dry" &&
+            f.motion_reliable &&
+            f.speed_kmh >= 1 &&
+            t.forecast.moving(compass(f.direction_deg, locale), f.speed_kmh.toFixed(0))}
+        </p>
+      </div>
     </section>
   );
 }
@@ -48,6 +62,8 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     const ease = dropsBelow(f, f.heavy_dbz);
     return {
       tone: "heavy",
+      // Easing already: the downpour has thinned to rain.
+      scene: ease >= 0 && fromNow(ease) === 0 ? "rain" : "downpour",
       status: s.heavyNow,
       // The radar frame is 10–20 min old, so the easing may already be due.
       headline:
@@ -56,10 +72,14 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     };
   }
   if (f.raining_now) {
-    const status = (f.series[0]?.dbz ?? -32) < f.likely_dbz ? s.maybeLightNow : s.lightNow;
+    const maybe = (f.series[0]?.dbz ?? -32) < f.likely_dbz;
+    const status = maybe ? s.maybeLightNow : s.lightNow;
+    const scene: Scene = maybe ? "drizzle" : "rain";
     if (f.heavy_arrival_min >= 0) {
       return {
         tone: "light",
+        scene,
+        heavySoon: true,
         status,
         headline:
           fromNow(f.heavy_arrival_min) === 0 ? s.heavySoon : <>{s.heavyIn} {mins(f.heavy_arrival_min)}</>,
@@ -69,6 +89,7 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     const stop = dropsBelow(f, f.threshold_dbz);
     return {
       tone: "light",
+      scene,
       status,
       headline: s.noHeavy,
       detail: stop < 0 ? s.lightLasts : s.mayStop(at(stop)),
@@ -80,6 +101,7 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     if (heavy < 0 && peakFrom(f, f.arrival_min) < f.likely_dbz) {
       return {
         tone: "light",
+        scene: "gathering",
         status: s.maybeSoon,
         headline: fromNow(f.arrival_min) === 0 ? s.maybeSoon : <>{s.maybeIn} {mins(f.arrival_min)}</>,
         detail: s.drizzle(at(f.arrival_min)),
@@ -87,12 +109,14 @@ function view(f: Forecast, t: Dict, fromNow: (m: number) => number, at: (m: numb
     }
     return {
       tone: "light",
+      scene: "soon",
+      heavySoon: heavy >= 0,
       status: s.soon,
       headline: fromNow(f.arrival_min) === 0 ? s.soon : <>{s.rainIn} {mins(f.arrival_min)}</>,
       detail: heavy >= 0 ? s.heavyAfter(fromNow(heavy), at(heavy)) : s.moderate(at(f.arrival_min)),
     };
   }
-  return { tone: "dry", status: s.dry, headline: s.noRain };
+  return { tone: "dry", scene: "clear", status: s.dry, headline: s.noRain, detail: s.noRainDetail };
 }
 
 function Minutes({ text }: { text: string }) {

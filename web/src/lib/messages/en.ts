@@ -25,30 +25,30 @@ export const en: Dict = {
   },
 
   dashboard: {
-    unselect: "Clear",
     loading: "Checking the radar…",
     footerAddress: "Addresses & map",
   },
 
   intro: {
-    heading: "How long until rain reaches you?",
+    heading: ["How long until ", "rain", " reaches you?"],
     lead: "See the next hour of rain, right where you are.",
-    address: "Address",
-    addressExample: "Ben Thanh Market, District 1",
-    mapsLink: "Google Maps link",
-    mapsLinkExample: "Copy the share link",
-    coords: "Coordinates",
-    map: "Map",
-    mapExample: "Click any point",
   },
 
   map: {
     label: "Map for picking a place",
-    hint: "Click the map or drag the pin to pick a point",
+  },
+
+  locate: {
+    cta: "Use my location",
+    button: "My location",
+    busy: "Finding you…",
+    denied: "Location access is blocked. Allow it in your browser settings, or search by address.",
+    failed: "Couldn't get your location. Try again or search by address.",
+    insecure: "Browsers only share your location with https pages. Search by address instead.",
   },
 
   search: {
-    placeholder: "Address, Google Maps link or coordinates",
+    placeholder: "Search",
     label: "Find a place",
     submit: "Search",
     busy: "Searching…",
@@ -86,6 +86,7 @@ export const en: Dict = {
 
     dry: "Looking dry",
     noRain: "No rain in the next 60 minutes",
+    noRainDetail: "Radar shows no rain heading your way",
   },
 
   admin: {

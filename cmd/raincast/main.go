@@ -51,9 +51,10 @@ func main() {
 	cors := flag.String("cors", "http://localhost:3000", "allowed CORS origin (empty to disable)")
 	debug := flag.Bool("debug", false, "verbose logging")
 	geoUA := flag.String("geocode-ua", "raincast/1.0", "User-Agent sent to Geoapify and when expanding short map links")
-	mapStyle := flag.String("map-style", "dark-matter", "Geoapify map tile style (see https://apidocs.geoapify.com/docs/maps/map-tiles/)")
+	mapStyle := flag.String("map-style", "osm-liberty", "Geoapify map tile style (see https://apidocs.geoapify.com/docs/maps/map-tiles/)")
 	mapCache := flag.String("map-cache", "data/maptiles", "map tile cache directory (empty to disable)")
-	mapCacheAge := flag.Duration("map-cache-age", 24*time.Hour, "how long cached map tiles are kept (0 keeps them forever)")
+	mapCacheAge := flag.Duration("map-cache-age", 15*24*time.Hour, "how long cached map tiles are kept (0 keeps them forever)")
+	mapCacheMB := flag.Int64("map-cache-mb", 1024, "size cap of the map tile cache in MB; the oldest tiles go first (0 for no cap)")
 	geoCountries := flag.String("geocode-countries", "vn", "comma-separated country codes to limit address search (empty for worldwide)")
 	// Live tiles are only read again while they are among a forecast's
 	// history frames; cmd/collect keeps the backtest's tiles.
@@ -102,6 +103,7 @@ func main() {
 	geo := geocode.New(os.Getenv("GEOAPIFY_KEY"), *geoUA, *geoCountries)
 	geo.Bias = &geocode.LatLon{Lat: cfg.Stations[0].Lat, Lon: cfg.Stations[0].Lon}
 	geo.TileStyle, geo.TileDir, geo.TileAge = *mapStyle, *mapCache, *mapCacheAge
+	geo.TileMaxBytes = *mapCacheMB << 20
 	geo.Log = log
 	if geo.Key == "" {
 		// Coordinates and map links still work; addresses and the map do not.

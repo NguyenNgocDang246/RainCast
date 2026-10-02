@@ -18,6 +18,8 @@ const HOME: [number, number] = [10.78, 106.7];
 const HOME_ZOOM = 10;
 const PLACE_ZOOM = 14;
 const MAX_ZOOM = 18; // geocode.MaxTileZoom
+/** Browsers keep tiles for 30 days: change this when the server's -map-style changes. */
+const TILE_STYLE = "osm-liberty";
 
 const ATTRIBUTION =
   'Powered by <a href="https://www.geoapify.com/" target="_blank" rel="noreferrer">Geoapify</a> · ' +
@@ -48,15 +50,29 @@ export function LocationMap({ place, onPick }: Props) {
   useEffect(() => {
     let cancelled = false;
     let m: Leaflet.Map | null = null;
+    // A click that closes the search's open list only closes it. Checked on
+    // pointerdown, before the input loses focus.
+    const container = el.current;
+    let dismissing = false;
+    const onDown = () => {
+      dismissing = document.activeElement?.getAttribute("aria-expanded") === "true";
+    };
+    container?.addEventListener("pointerdown", onDown, { capture: true });
     import("leaflet").then((mod) => {
       if (cancelled || !el.current) return;
       const L = mod.default ?? mod;
-      m = L.map(el.current, { center: HOME, zoom: HOME_ZOOM, maxZoom: MAX_ZOOM });
-      L.tileLayer(`${API_BASE}/api/tiles/{z}/{x}/{y}.png`, {
+      // Zoom sits bottom-right: the search box covers the top-left corner.
+      m = L.map(el.current, { center: HOME, zoom: HOME_ZOOM, maxZoom: MAX_ZOOM, zoomControl: false });
+      L.control.zoom({ position: "bottomright" }).addTo(m);
+      L.tileLayer(`${API_BASE}/api/tiles/{z}/{x}/{y}.png?style=${TILE_STYLE}`, {
         maxZoom: MAX_ZOOM,
         attribution: ATTRIBUTION,
       }).addTo(m);
       m.on("click", (e: Leaflet.LeafletMouseEvent) => {
+        if (dismissing) {
+          dismissing = false;
+          return;
+        }
         picked.current = { lat: e.latlng.lat, lon: e.latlng.lng };
         pickRef.current(e.latlng.lat, e.latlng.lng);
       });
@@ -66,6 +82,7 @@ export function LocationMap({ place, onPick }: Props) {
     });
     return () => {
       cancelled = true;
+      container?.removeEventListener("pointerdown", onDown, { capture: true });
       m?.remove();
       map.current = null;
       pin.current = null;
@@ -109,15 +126,8 @@ export function LocationMap({ place, onPick }: Props) {
     picked.current = null;
   }, [ready, lat, lon]);
 
+  // Fills its positioned parent; isolate keeps Leaflet's z-indexes below the overlays.
   return (
-    <div className="mt-4 w-full max-w-xl">
-      <div
-        ref={el}
-        role="application"
-        aria-label={t.map.label}
-        className="isolate h-72 w-full overflow-hidden rounded-xl border border-slate-800 bg-slate-900"
-      />
-      <p className="mt-2 text-center text-xs text-slate-500">{t.map.hint}</p>
-    </div>
+    <div ref={el} role="application" aria-label={t.map.label} className="absolute inset-0 isolate bg-slate-200" />
   );
 }

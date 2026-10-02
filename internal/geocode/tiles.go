@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"time"
 )
@@ -72,11 +73,19 @@ func (c *Client) tileExpired(mod, now time.Time) bool {
 }
 
 // PruneTiles deletes cached map tiles older than TileAge, along with temp
-// files a crashed write left behind.
+// files a crashed write left behind, then the oldest tiles until the cache
+// fits in TileMaxBytes.
 func (c *Client) PruneTiles() error {
-	if c.TileDir == "" || c.TileAge <= 0 {
+	if c.TileDir == "" || (c.TileAge <= 0 && c.TileMaxBytes <= 0) {
 		return nil
 	}
+	type tile struct {
+		path string
+		size int64
+		mod  time.Time
+	}
+	var kept []tile
+	var total int64
 	now := time.Now()
 	err := filepath.WalkDir(c.TileDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -89,7 +98,12 @@ func (c *Client) PruneTiles() error {
 			return nil
 		}
 		info, err := d.Info()
-		if err != nil || !c.tileExpired(info.ModTime(), now) {
+		if err != nil {
+			return nil
+		}
+		if !c.tileExpired(info.ModTime(), now) {
+			kept = append(kept, tile{path, info.Size(), info.ModTime()})
+			total += info.Size()
 			return nil
 		}
 		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -100,7 +114,20 @@ func (c *Client) PruneTiles() error {
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
-	return err
+	if err != nil || c.TileMaxBytes <= 0 || total <= c.TileMaxBytes {
+		return err
+	}
+	slices.SortFunc(kept, func(a, b tile) int { return a.mod.Compare(b.mod) })
+	for _, t := range kept {
+		if total <= c.TileMaxBytes {
+			break
+		}
+		if err := os.Remove(t.path); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+		total -= t.size
+	}
+	return nil
 }
 
 func (c *Client) fetchTile(ctx context.Context, z, x, y int) ([]byte, error) {

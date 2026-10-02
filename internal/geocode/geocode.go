@@ -53,10 +53,12 @@ type Client struct {
 	// Map tiles: Geoapify style name and where fetched tiles are kept
 	// (empty TileDir disables the disk cache), and how long a cached tile
 	// is used before it is fetched again (0 keeps tiles forever).
-	TileURL   string
-	TileStyle string
-	TileDir   string
-	TileAge   time.Duration
+	// TileMaxBytes caps the cache size (0 for no cap).
+	TileURL      string
+	TileStyle    string
+	TileDir      string
+	TileAge      time.Duration
+	TileMaxBytes int64
 
 	rate  limiter
 	pause coolDown
@@ -91,9 +93,10 @@ func New(key, userAgent, countries string) *Client {
 
 		ShortLinkHosts: map[string]bool{"maps.app.goo.gl": true, "goo.gl": true},
 
-		TileURL:   DefaultTileURL,
-		TileStyle: "dark-matter",
-		TileAge:   24 * time.Hour,
+		TileURL:      DefaultTileURL,
+		TileStyle:    "osm-liberty",
+		TileAge:      15 * 24 * time.Hour,
+		TileMaxBytes: 1 << 30,
 	}
 }
 
