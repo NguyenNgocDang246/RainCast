@@ -9,6 +9,29 @@ services:
     env_file: .env
     volumes:
       - raincast-data:/app/data
+      - geoip-data:/app/geoip:ro
+
+  # Keeps DB-IP's free IP-to-country database (CC BY 4.0, no account; a new
+  # one each month) fresh. It names the user's country for address search.
+  # Written to a temp file and renamed, so the api never reads half a file.
+  geoip:
+    image: alpine:3
+    restart: unless-stopped
+    volumes:
+      - geoip-data:/geoip
+    command:
+      - sh
+      - -c
+      - |
+        while :; do
+          if [ ! -s /geoip/country.mmdb ] || [ -n "$$(find /geoip/country.mmdb -mtime +7)" ]; then
+            m=$$(date -u +%Y-%m)
+            wget -qO- "https://download.db-ip.com/free/dbip-country-lite-$$m.mmdb.gz" | gunzip > /geoip/country.tmp \
+              && [ -s /geoip/country.tmp ] && mv /geoip/country.tmp /geoip/country.mmdb && echo "updated $$m" \
+              || { rm -f /geoip/country.tmp; echo "download failed"; }
+          fi
+          sleep 86400
+        done
 
   # Collects radar data for backtesting, apart from the web app. Off by
   # default: docker compose --profile collect up -d. Score the data with
@@ -46,5 +69,6 @@ services:
 
 volumes:
   raincast-data:
+  geoip-data:
   caddy-data:
   caddy-config:

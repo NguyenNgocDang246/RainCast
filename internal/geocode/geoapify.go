@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -31,9 +32,10 @@ const (
 	reverse      = "reverse"
 )
 
-// Suggest returns places matching a partial query, nearest to bias first.
-// Coordinates and links return nothing: they are resolved on submit.
-func (c *Client) Suggest(ctx context.Context, q string, bias *LatLon) ([]Place, error) {
+// Suggest returns places matching a partial query, nearest to bias first and
+// favoring country (the user's ISO code, "" when unknown). Coordinates and
+// links return nothing: they are resolved on submit.
+func (c *Client) Suggest(ctx context.Context, q string, bias *LatLon, country string) ([]Place, error) {
 	q = strings.Join(strings.Fields(q), " ")
 	if c.Key == "" || utf8.RuneCountInString(q) < minSuggestRunes || urlRe.MatchString(q) {
 		return []Place{}, nil
@@ -41,27 +43,30 @@ func (c *Client) Suggest(ctx context.Context, q string, bias *LatLon) ([]Place, 
 	if _, _, ok := ParseCoords(q); ok {
 		return []Place{}, nil
 	}
-	return c.textSearch(ctx, autocomplete, q, bias, c.SuggestLimit)
+	return c.textSearch(ctx, autocomplete, q, bias, country, c.SuggestLimit)
 }
 
 // searchText finds places for a submitted query with the full geocoder,
 // which also knows areas and structured addresses autocomplete may skip.
-func (c *Client) searchText(ctx context.Context, q string) ([]Place, error) {
+func (c *Client) searchText(ctx context.Context, q, country string) ([]Place, error) {
 	q = strings.Join(strings.Fields(q), " ")
 	if q == "" {
 		return []Place{}, nil
 	}
-	return c.textSearch(ctx, search, q, nil, c.Limit)
+	return c.textSearch(ctx, search, q, nil, country, c.Limit)
 }
 
-func (c *Client) textSearch(ctx context.Context, endpoint, q string, bias *LatLon, limit int) ([]Place, error) {
+func (c *Client) textSearch(ctx context.Context, endpoint, q string, bias *LatLon, country string, limit int) ([]Place, error) {
 	if c.Key == "" {
 		return nil, ErrNoKey
 	}
-	if bias == nil {
+	ccs := c.countries(country)
+	if bias == nil && (country == "" || c.preferred(country)) {
+		// The default point lies in the preferred countries; it would pull a
+		// user elsewhere toward it.
 		bias = c.Bias
 	}
-	key := endpoint + ":" + strings.ToLower(q)
+	key := endpoint + ":" + strings.ToLower(q) + "|" + strings.Join(ccs, ",")
 	if bias != nil {
 		// Round the bias so nearby users share cache entries.
 		key += fmt.Sprintf("@%.1f,%.1f", bias.Lat, bias.Lon)
@@ -74,11 +79,17 @@ func (c *Client) textSearch(ctx context.Context, endpoint, q string, bias *LatLo
 	v := url.Values{}
 	v.Set("text", q)
 	v.Set("limit", strconv.Itoa(limit))
-	if f := c.countryFilter(); f != "" {
-		v.Set("filter", f)
+	// Biases rank results without excluding any, so "Singapore" still finds
+	// the city from Vietnam.
+	var biases []string
+	if len(ccs) > 0 {
+		biases = append(biases, "countrycode:"+strings.Join(ccs, ","))
 	}
 	if bias != nil {
-		v.Set("bias", fmt.Sprintf("proximity:%.4f,%.4f", bias.Lon, bias.Lat))
+		biases = append(biases, fmt.Sprintf("proximity:%.4f,%.4f", bias.Lon, bias.Lat))
+	}
+	if len(biases) > 0 {
+		v.Set("bias", strings.Join(biases, "|"))
 	}
 	places, err := c.get(ctx, endpoint, v, limit)
 	if err != nil {
@@ -118,18 +129,28 @@ func coordsPlace(lat, lon float64) Place {
 	return Place{Name: fmt.Sprintf("%.5f, %.5f", lat, lon), Lat: lat, Lon: lon}
 }
 
-// countryFilter turns "vn,la" into Geoapify's "countrycode:vn,la".
-func (c *Client) countryFilter() string {
+// countries returns the countries to favor: the user's when known, else the
+// configured ones.
+func (c *Client) countries(country string) []string {
+	if cc := strings.ToLower(strings.TrimSpace(country)); cc != "" {
+		return []string{cc}
+	}
+	return c.preferredList()
+}
+
+// preferredList turns "vn,la" into ["vn" "la"].
+func (c *Client) preferredList() []string {
 	var ccs []string
 	for _, cc := range strings.Split(c.Countries, ",") {
 		if cc = strings.ToLower(strings.TrimSpace(cc)); cc != "" {
 			ccs = append(ccs, cc)
 		}
 	}
-	if len(ccs) == 0 {
-		return ""
-	}
-	return "countrycode:" + strings.Join(ccs, ",")
+	return ccs
+}
+
+func (c *Client) preferred(country string) bool {
+	return slices.Contains(c.preferredList(), strings.ToLower(country))
 }
 
 // get calls a /v1/geocode endpoint and counts the outcome.

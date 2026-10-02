@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 
 	"raincast/internal/geocode"
@@ -39,11 +40,11 @@ func (f *fakeSource) ForecastAt(_ context.Context, lat, lon float64) (*pipeline.
 
 type fakeGeo struct{}
 
-func (fakeGeo) Resolve(_ context.Context, q string) ([]geocode.Place, error) {
+func (fakeGeo) Resolve(_ context.Context, q, country string) ([]geocode.Place, error) {
 	if q == "link" {
 		return nil, geocode.ErrUnresolvedLink
 	}
-	return []geocode.Place{{Name: q, Lat: 1, Lon: 2}}, nil
+	return []geocode.Place{{Name: q, Address: country, Lat: 1, Lon: 2}}, nil
 }
 
 func (fakeGeo) Stats() geocode.Stats { return geocode.Stats{SearchOK: 7} }
@@ -59,12 +60,12 @@ func (fakeGeo) Tile(_ context.Context, z, x, y int) ([]byte, error) {
 	return []byte("png"), nil
 }
 
-func (fakeGeo) Suggest(_ context.Context, q string, bias *geocode.LatLon) ([]geocode.Place, error) {
+func (fakeGeo) Suggest(_ context.Context, q string, bias *geocode.LatLon, country string) ([]geocode.Place, error) {
 	name := q
 	if bias != nil {
 		name += " near"
 	}
-	return []geocode.Place{{Name: name}}, nil
+	return []geocode.Place{{Name: name, Address: country}}, nil
 }
 
 func do(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -127,6 +128,38 @@ func TestSuggestEndpoint(t *testing.T) {
 		var ps []geocode.Place
 		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ps) != nil || ps[0].Name != want {
 			t.Errorf("%s: %d %s", path, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestSearchUsesClientCountry(t *testing.T) {
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{
+		HorizonMin: 60,
+		CountryOf: func(ip netip.Addr) string {
+			return map[string]string{"203.0.113.5": "sg", "198.51.100.7": "vn"}[ip.String()]
+		},
+	})
+	for _, c := range []struct {
+		name, remote, xff, want string
+	}{
+		{"direct client", "203.0.113.5:4000", "", "sg"},
+		{"direct client cannot spoof", "198.51.100.7:4000", "203.0.113.5", "vn"},
+		{"behind proxy", "172.18.0.4:5000", "198.51.100.7, 203.0.113.5", "sg"},
+		{"behind proxy, IPv4-mapped peer", "[::ffff:127.0.0.1]:5000", "203.0.113.5", "sg"},
+		{"proxy without header", "172.18.0.4:5000", "", ""},
+	} {
+		for _, path := range []string{"/api/suggest?q=ben", "/api/geocode?q=ben"} {
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			req.RemoteAddr = c.remote
+			if c.xff != "" {
+				req.Header.Set("X-Forwarded-For", c.xff)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			var ps []geocode.Place
+			if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &ps) != nil || ps[0].Address != c.want {
+				t.Errorf("%s %s: %d %s, want country %q", c.name, path, rec.Code, rec.Body, c.want)
+			}
 		}
 	}
 }

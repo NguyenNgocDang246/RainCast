@@ -36,7 +36,9 @@ type Client struct {
 	Key       string
 	Log       *slog.Logger // optional
 	UserAgent string
-	Countries string // comma-separated ISO codes limiting results; empty for worldwide
+	// Countries are comma-separated ISO codes ranked first when the user's
+	// country is unknown; results elsewhere are still returned.
+	Countries string
 	Language  string
 	Limit     int // results for a submitted search
 	// SuggestLimit is the number of suggestions while typing.

@@ -56,7 +56,7 @@ func TestResolveShortLink(t *testing.T) {
 
 	c := New("", "ua", "vn")
 	c.ShortLinkHosts[su.Hostname()] = true
-	ps, err := c.Resolve(context.Background(), "Chỗ X\n"+srv.URL+"/abc")
+	ps, err := c.Resolve(context.Background(), "Chỗ X\n"+srv.URL+"/abc", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestResolveDoesNotFetchOtherHosts(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
 	defer srv.Close()
 	c := New("", "ua", "")
-	_, err := c.Resolve(context.Background(), srv.URL+"/maps/nothing")
+	_, err := c.Resolve(context.Background(), srv.URL+"/maps/nothing", "")
 	if !errors.Is(err, ErrUnresolvedLink) || hit {
 		t.Fatalf("err=%v hit=%v", err, hit)
 	}
@@ -83,7 +83,7 @@ func TestResolveNameLinkFallsBackToSearch(t *testing.T) {
 		}
 		w.Write([]byte(`{"results":[{"address_line1":"Landmark 81","address_line2":"Bình Thạnh","lat":10.795,"lon":106.722}]}`))
 	})
-	ps, err := c.Resolve(context.Background(), "https://maps.google.com/maps?q=Landmark+81")
+	ps, err := c.Resolve(context.Background(), "https://maps.google.com/maps?q=Landmark+81", "")
 	if err != nil || len(ps) != 1 || ps[0].Lat != 10.795 {
 		t.Fatalf("%+v %v", ps, err)
 	}

@@ -25,8 +25,9 @@ var (
 )
 
 // Resolve accepts an address, a "lat, lon" pair or a Google Maps link
-// (full or maps.app.goo.gl short link) and returns candidate places.
-func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
+// (full or maps.app.goo.gl short link) and returns candidate places. Text
+// searches favor country (the user's ISO code, "" when unknown).
+func (c *Client) Resolve(ctx context.Context, input, country string) ([]Place, error) {
 	input = strings.TrimSpace(input)
 	if lat, lon, ok := ParseCoords(input); ok {
 		// The name is best-effort: the coordinates alone are enough.
@@ -45,7 +46,7 @@ func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
 	}
 	u, err := url.Parse(input)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return c.searchText(ctx, input)
+		return c.searchText(ctx, input, country)
 	}
 	if c.ShortLinkHosts[strings.ToLower(u.Hostname())] {
 		if u, err = c.expand(ctx, u); err != nil {
@@ -57,7 +58,7 @@ func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
 	case hasCoords:
 		return []Place{p}, nil
 	case p.Name != "":
-		return c.searchText(ctx, p.Name)
+		return c.searchText(ctx, p.Name, country)
 	default:
 		return nil, ErrUnresolvedLink
 	}

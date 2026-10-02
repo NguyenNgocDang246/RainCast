@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -30,8 +31,9 @@ type Source interface {
 // Geocoder turns an address, coordinates or a map link into places, names
 // points picked on the map and serves the map's tiles.
 type Geocoder interface {
-	Resolve(ctx context.Context, input string) ([]geocode.Place, error)
-	Suggest(ctx context.Context, q string, bias *geocode.LatLon) ([]geocode.Place, error)
+	// country is the user's ISO code ("" when unknown); its places rank first.
+	Resolve(ctx context.Context, input, country string) ([]geocode.Place, error)
+	Suggest(ctx context.Context, q string, bias *geocode.LatLon, country string) ([]geocode.Place, error)
 	Reverse(ctx context.Context, lat, lon float64) (geocode.Place, error)
 	Tile(ctx context.Context, z, x, y int) ([]byte, error)
 	Stats() geocode.Stats
@@ -44,6 +46,9 @@ type Config struct {
 	// Backtest reads the report cmd/backtest last wrote (nil when none);
 	// nil serves no report.
 	Backtest func() (*backtest.Report, error)
+	// CountryOf names a client IP's country ("vn"), "" when unknown; nil
+	// knows none. Searches favor the user's country.
+	CountryOf func(netip.Addr) string
 }
 
 // Server holds the handler dependencies.
@@ -54,6 +59,7 @@ type Server struct {
 	log        *slog.Logger
 	corsOrigin string
 	backtest   func() (*backtest.Report, error)
+	countryOf  func(netip.Addr) string
 	stepMin    int
 	horizonMin int
 }
@@ -62,7 +68,7 @@ type Server struct {
 func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config) http.Handler {
 	s := &Server{
 		src: src, geo: geo, store: st, log: log,
-		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest,
+		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest, countryOf: cfg.CountryOf,
 		stepMin: 10, horizonMin: cfg.HorizonMin,
 	}
 	mux := http.NewServeMux()
@@ -122,7 +128,7 @@ func (s *Server) geocode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "q is required (max 500 characters)")
 		return
 	}
-	places, err := s.geo.Resolve(r.Context(), q)
+	places, err := s.geo.Resolve(r.Context(), q, s.country(r))
 	switch {
 	case errors.Is(err, geocode.ErrUnresolvedLink):
 		writeError(w, http.StatusUnprocessableEntity, "link has no location")
@@ -149,7 +155,7 @@ func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
 	if err1 == nil && err2 == nil && math.Abs(lat) <= 90 && math.Abs(lon) <= 180 {
 		bias = &geocode.LatLon{Lat: lat, Lon: lon}
 	}
-	places, err := s.geo.Suggest(r.Context(), text, bias)
+	places, err := s.geo.Suggest(r.Context(), text, bias, s.country(r))
 	if err != nil {
 		if r.Context().Err() == nil {
 			s.log.Warn("suggest", "err", err)
@@ -158,6 +164,37 @@ func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
 		places = []geocode.Place{}
 	}
 	writeJSON(w, http.StatusOK, places)
+}
+
+// country is the requesting user's country, "" when unknown.
+func (s *Server) country(r *http.Request) string {
+	if s.countryOf == nil {
+		return ""
+	}
+	return s.countryOf(clientIP(r))
+}
+
+// clientIP is the request's origin. Behind the reverse proxy (a private or
+// loopback peer) it is the last X-Forwarded-For entry, which the proxy
+// appends; a direct client's header is ignored, so it cannot claim another IP.
+func clientIP(r *http.Request) netip.Addr {
+	peer, err := netip.ParseAddrPort(r.RemoteAddr)
+	if err != nil {
+		return netip.Addr{}
+	}
+	ip := peer.Addr().Unmap()
+	if !ip.IsLoopback() && !ip.IsPrivate() {
+		return ip
+	}
+	xff := strings.Join(r.Header.Values("X-Forwarded-For"), ",")
+	if xff == "" {
+		return ip
+	}
+	last := xff[strings.LastIndex(xff, ",")+1:]
+	if fwd, err := netip.ParseAddr(strings.TrimSpace(last)); err == nil {
+		return fwd.Unmap()
+	}
+	return ip
 }
 
 // reverse names a point picked on the map. A failed lookup still answers

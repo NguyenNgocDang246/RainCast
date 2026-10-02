@@ -21,6 +21,7 @@ import (
 
 	"raincast/internal/backtest"
 	"raincast/internal/geocode"
+	"raincast/internal/geoip"
 	"raincast/internal/guard"
 	"raincast/internal/model"
 	"raincast/internal/pipeline"
@@ -55,7 +56,8 @@ func main() {
 	mapCache := flag.String("map-cache", "data/maptiles", "map tile cache directory (empty to disable)")
 	mapCacheAge := flag.Duration("map-cache-age", 15*24*time.Hour, "how long cached map tiles are kept (0 keeps them forever)")
 	mapCacheMB := flag.Int64("map-cache-mb", 1024, "size cap of the map tile cache in MB; the oldest tiles go first (0 for no cap)")
-	geoCountries := flag.String("geocode-countries", "vn", "comma-separated country codes to limit address search (empty for worldwide)")
+	geoCountries := flag.String("geocode-countries", "vn", "comma-separated country codes ranked first in address search when the user's country is unknown")
+	geoipDB := flag.String("geoip-db", "geoip/country.mmdb", "IP-to-country database (MaxMind format, e.g. DB-IP Lite) naming the user's country, ranked first in address search (missing: -geocode-countries is used)")
 	// Live tiles are only read again while they are among a forecast's
 	// history frames; cmd/collect keeps the backtest's tiles.
 	cfg.CacheAge = 3 * time.Hour
@@ -109,15 +111,21 @@ func main() {
 		// Coordinates and map links still work; addresses and the map do not.
 		log.Warn("GEOAPIFY_KEY is not set: address search and map tiles are off")
 	}
+	gip, err := geoip.Open(*geoipDB, log)
+	if err != nil {
+		// It loads once the geoip service writes the file; until then search
+		// favors -geocode-countries.
+		log.Info("geoip not loaded", "err", err)
+	}
 	log.Info("config", "stations", len(cfg.Stations), "model", cfg.Model.Name, "trend", cfg.Model.Trend, "geoapify", geo.Key != "")
 	lim.DiskPath, lim.DirPath = filepath.Dir(*dbPath), *cacheDir
-	if err := run(cfg, lim, *rateLimit, geo, *addr, *dbPath, *cacheDir, *poll, *cors, log); err != nil {
+	if err := run(cfg, lim, *rateLimit, geo, gip, *addr, *dbPath, *cacheDir, *poll, *cors, log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
 	}
 }
 
-func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Client, addr, dbPath, cacheDir string, poll time.Duration, cors string, log *slog.Logger) error {
+func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Client, gip *geoip.DB, addr, dbPath, cacheDir string, poll time.Duration, cors string, log *slog.Logger) error {
 	sigCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	// Everything long-running derives from the guard's context, so crossing
@@ -157,7 +165,7 @@ func run(cfg pipeline.Config, lim guard.Limits, rateLimit int, geo *geocode.Clie
 	srv := &http.Server{
 		Addr: addr,
 		Handler: server.New(p, geo, st, log, server.Config{
-			CORSOrigin: cors, HorizonMin: cfg.Horizon,
+			CORSOrigin: cors, HorizonMin: cfg.Horizon, CountryOf: gip.Country,
 			Backtest: func() (*backtest.Report, error) {
 				return backtest.ReadReport(filepath.Join(filepath.Dir(dbPath), "backtest.json"))
 			},

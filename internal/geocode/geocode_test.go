@@ -37,13 +37,48 @@ const benThanh = `{"results":[
 	{"address_line1":"","formatted":"Đường X, Quận 1","lat":10.1,"lon":106.1}
 ]}`
 
+func TestSearchFavorsUserCountry(t *testing.T) {
+	biases := map[string]string{}
+	c := geoapify(t, func(endpoint string, w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if q.Has("filter") {
+			t.Errorf("filter = %q, want none", q.Get("filter"))
+		}
+		biases[q.Get("text")] = q.Get("bias")
+		w.Write([]byte(`{"results":[]}`))
+	})
+	c.Bias = &LatLon{10.8, 106.7}
+	ctx := context.Background()
+	c.Resolve(ctx, "singapore", "SG") // abroad: no pull toward the default point
+	c.Resolve(ctx, "ben thanh", "")   // unknown: configured country and point
+	c.Suggest(ctx, "marina", &LatLon{1.28, 103.85}, "sg")
+	want := map[string]string{
+		"singapore": "countrycode:sg",
+		"ben thanh": "countrycode:vn|proximity:106.7000,10.8000",
+		"marina":    "countrycode:sg|proximity:103.8500,1.2800",
+	}
+	for text, b := range want {
+		if biases[text] != b {
+			t.Errorf("%s: bias = %q, want %q", text, biases[text], b)
+		}
+	}
+
+	// The cache keeps countries apart.
+	calls := len(biases)
+	delete(biases, "singapore")
+	c.Resolve(ctx, "singapore", "vn")
+	if len(biases) != calls || biases["singapore"] != "countrycode:vn|proximity:106.7000,10.8000" {
+		t.Fatalf("biases = %v", biases)
+	}
+}
+
 func TestSuggestParsesAndCaches(t *testing.T) {
 	var calls atomic.Int32
 	c := geoapify(t, func(endpoint string, w http.ResponseWriter, r *http.Request) {
 		calls.Add(1)
 		q := r.URL.Query()
-		if endpoint != "autocomplete" || q.Get("text") != "ben thanh" || q.Get("filter") != "countrycode:vn" ||
-			q.Get("bias") != "proximity:106.7000,10.8000" || q.Get("lang") != "vi" || q.Get("limit") != "6" {
+		if endpoint != "autocomplete" || q.Get("text") != "ben thanh" || q.Has("filter") ||
+			q.Get("bias") != "countrycode:vn|proximity:106.7000,10.8000" || q.Get("lang") != "vi" || q.Get("limit") != "6" {
 			t.Errorf("%s %v", endpoint, q)
 		}
 		if r.Header.Get("User-Agent") != "test-agent" {
@@ -51,7 +86,7 @@ func TestSuggestParsesAndCaches(t *testing.T) {
 		}
 		w.Write([]byte(benThanh))
 	})
-	ps, err := c.Suggest(context.Background(), "  ben   thanh ", &LatLon{10.8, 106.7})
+	ps, err := c.Suggest(context.Background(), "  ben   thanh ", &LatLon{10.8, 106.7}, "vn")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +94,7 @@ func TestSuggestParsesAndCaches(t *testing.T) {
 	if len(ps) != 2 || ps[0].Name != "Chợ Bến Thành" || ps[0].Address != "Lê Lợi, Quận 1, Vietnam" || ps[1].Name != "Đường X" {
 		t.Fatalf("places = %+v", ps)
 	}
-	c.Suggest(context.Background(), "Ben Thanh", &LatLon{10.81, 106.71})
+	c.Suggest(context.Background(), "Ben Thanh", &LatLon{10.81, 106.71}, "")
 	if calls.Load() != 1 {
 		t.Fatalf("calls = %d, want 1 (cached)", calls.Load())
 	}
@@ -71,12 +106,12 @@ func TestSuggestParsesAndCaches(t *testing.T) {
 func TestSuggestSkipsCoordsLinksAndNoKey(t *testing.T) {
 	c := geoapify(t, func(string, http.ResponseWriter, *http.Request) { t.Error("unexpected request") })
 	for _, q := range []string{"a", "10.8, 106.7", "https://maps.app.goo.gl/x"} {
-		if ps, err := c.Suggest(context.Background(), q, nil); err != nil || len(ps) != 0 {
+		if ps, err := c.Suggest(context.Background(), q, nil, ""); err != nil || len(ps) != 0 {
 			t.Errorf("%q: %v %v", q, ps, err)
 		}
 	}
 	c.Key = ""
-	if ps, err := c.Suggest(context.Background(), "ben thanh", nil); err != nil || len(ps) != 0 {
+	if ps, err := c.Suggest(context.Background(), "ben thanh", nil, ""); err != nil || len(ps) != 0 {
 		t.Errorf("no key: %v %v", ps, err)
 	}
 }
@@ -88,7 +123,7 @@ func TestResolveTextUsesSearch(t *testing.T) {
 		}
 		w.Write([]byte(benThanh))
 	})
-	ps, err := c.Resolve(context.Background(), "chợ bến thành")
+	ps, err := c.Resolve(context.Background(), "chợ bến thành", "")
 	if err != nil || len(ps) != 2 {
 		t.Fatalf("%+v %v", ps, err)
 	}
@@ -110,7 +145,7 @@ func TestReverse(t *testing.T) {
 	if err != nil || p.Name != "12 Lê Lợi" || p.Address != "Quận 1" || p.Lat != 10.7725 || p.Lon != 106.698 {
 		t.Fatalf("%+v %v", p, err)
 	}
-	if ps, err := c.Resolve(context.Background(), "10.7725, 106.698"); err != nil || len(ps) != 1 || ps[0].Name != "12 Lê Lợi" {
+	if ps, err := c.Resolve(context.Background(), "10.7725, 106.698", ""); err != nil || len(ps) != 1 || ps[0].Name != "12 Lê Lợi" {
 		t.Fatalf("resolve coords: %+v %v", ps, err)
 	}
 	if st := c.Stats(); st.ReverseOK != 1 || st.CacheHits != 1 {
@@ -126,7 +161,7 @@ func TestReverseFallsBackToCoords(t *testing.T) {
 	if err == nil || p.Name != "10.85000, 106.77000" || p.Lat != 10.85 {
 		t.Fatalf("%+v %v", p, err)
 	}
-	ps, err := c.Resolve(context.Background(), "10.85, 106.77")
+	ps, err := c.Resolve(context.Background(), "10.85, 106.77", "")
 	if err != nil || len(ps) != 1 || ps[0].Name != "10.85000, 106.77000" {
 		t.Fatalf("resolve coords: %+v %v", ps, err)
 	}
@@ -142,7 +177,7 @@ func TestRateLimitedCoolsDown(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	})
 	for _, q := range []string{"aa", "bb"} {
-		if _, err := c.Suggest(context.Background(), q, nil); err == nil {
+		if _, err := c.Suggest(context.Background(), q, nil, ""); err == nil {
 			t.Fatalf("%s: no error", q)
 		}
 	}
@@ -155,7 +190,7 @@ func TestRateLimitedCoolsDown(t *testing.T) {
 func TestErrorHidesKey(t *testing.T) {
 	c := New("secret-key", "ua", "")
 	c.BaseURL = "http://127.0.0.1:1"
-	_, err := c.Suggest(context.Background(), "ben thanh", nil)
+	_, err := c.Suggest(context.Background(), "ben thanh", nil, "")
 	if err == nil || strings.Contains(err.Error(), "secret-key") {
 		t.Fatalf("err = %v", err)
 	}
@@ -168,11 +203,11 @@ func TestErrorHidesKey(t *testing.T) {
 
 func TestNoKey(t *testing.T) {
 	c := New("", "ua", "")
-	if _, err := c.Resolve(context.Background(), "ben thanh"); err != ErrNoKey {
+	if _, err := c.Resolve(context.Background(), "ben thanh", ""); err != ErrNoKey {
 		t.Fatalf("err = %v", err)
 	}
 	// Coordinates work without a key.
-	if ps, err := c.Resolve(context.Background(), "10.85, 106.77"); err != nil || len(ps) != 1 || ps[0].Lat != 10.85 {
+	if ps, err := c.Resolve(context.Background(), "10.85, 106.77", ""); err != nil || len(ps) != 1 || ps[0].Lat != 10.85 {
 		t.Fatalf("%+v %v", ps, err)
 	}
 }
@@ -189,7 +224,7 @@ func TestRateLimit(t *testing.T) {
 	c.rate.interval = 50 * time.Millisecond
 	var wg sync.WaitGroup
 	for _, q := range []string{"aa", "bb", "cc"} {
-		wg.Go(func() { c.Suggest(context.Background(), q, nil) })
+		wg.Go(func() { c.Suggest(context.Background(), q, nil, "") })
 	}
 	wg.Wait()
 	if len(times) != 3 {

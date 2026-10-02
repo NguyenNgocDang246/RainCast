@@ -216,7 +216,10 @@ export function Dashboard() {
         >
           OpenStreetMap
         </a>{" "}
-        contributors
+        contributors ·{" "}
+        <a href="https://db-ip.com" className="hover:text-slate-400" target="_blank" rel="noreferrer">
+          IP Geolocation by DB-IP
+        </a>
       </footer>
     </main>
   );
