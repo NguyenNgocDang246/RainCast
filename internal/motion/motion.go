@@ -26,7 +26,7 @@ type Options struct {
 
 // DefaultOptions suit 10-minute frames at ~1.2 km/pixel.
 func DefaultOptions() Options {
-	return Options{BlockSize: 32, Search: 16, RainDBZ: 15, MinFrac: 0.05, MinCorr: 0.5, Workers: runtime.NumCPU()}
+	return Options{BlockSize: 32, Search: 16, RainDBZ: 15, MinFrac: 0.05, MinCorr: 0.5, Workers: runtime.GOMAXPROCS(0)}
 }
 
 // Field is a per-block motion field.
@@ -73,15 +73,17 @@ func Estimate(prev, cur *radar.Grid, minutes float64, opt Options) *Field {
 	f.V = make([]Vector, n)
 	f.Valid = make([]bool, n)
 
+	m := newMatcher(prev, cur, opt)
 	jobs := make(chan int)
 	var wg sync.WaitGroup
 	for range max(opt.Workers, 1) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			buf := m.buffers()
 			for i := range jobs {
 				bx, by := i%f.BW, i/f.BW
-				if dx, dy, ok := matchBlock(prev, cur, bx*bs, by*bs, opt); ok {
+				if dx, dy, ok := m.match(bx*bs, by*bs, buf); ok {
 					f.V[i] = Vector{dx / minutes, dy / minutes}
 					f.Valid[i] = true
 				}
@@ -98,56 +100,134 @@ func Estimate(prev, cur *radar.Grid, minutes float64, opt Options) *Field {
 	return f
 }
 
-// matchBlock finds where the block at (x0, y0) in cur came from in prev.
-// The returned (dx, dy) is the displacement prev → cur in pixels.
-func matchBlock(prev, cur *radar.Grid, x0, y0 int, opt Options) (dx, dy float64, ok bool) {
-	bs := opt.BlockSize
-	tpl := make([]float64, 0, bs*bs)
-	rainy := 0
-	for y := y0; y < y0+bs; y++ {
-		for x := x0; x < x0+bs; x++ {
-			v := cur.At(x, y)
-			if v >= opt.RainDBZ {
-				rainy++
-			}
-			tpl = append(tpl, intensity(v))
+// matcher holds both frames as matching signal, prepared once per frame
+// pair and shared read-only by the workers. prev is padded by Search on
+// every side (outside the grid is no echo) and has integral images, so each
+// candidate window's mean and spread cost O(1) instead of a pass over it.
+type matcher struct {
+	opt     Options
+	cur     []float64 // intensity of cur, cur.W wide
+	curW    int
+	pad     []float64 // intensity of prev, padded
+	padW    int
+	sum     []float64 // integral image of pad, (padW+1) wide
+	sum2    []float64 // integral image of pad²
+	curRain []bool    // cur pixel at or above RainDBZ
+}
+
+func newMatcher(prev, cur *radar.Grid, opt Options) *matcher {
+	s := opt.Search
+	m := &matcher{opt: opt, curW: cur.W, cur: make([]float64, len(cur.Data)), curRain: make([]bool, len(cur.Data))}
+	for i, v := range cur.Data {
+		m.cur[i] = intensity(v)
+		m.curRain[i] = v >= opt.RainDBZ
+	}
+	m.padW = prev.W + 2*s
+	padH := prev.H + 2*s
+	m.pad = make([]float64, m.padW*padH)
+	for y := 0; y < prev.H; y++ {
+		row := m.pad[(y+s)*m.padW+s:]
+		for x := 0; x < prev.W; x++ {
+			row[x] = intensity(prev.Data[y*prev.W+x])
 		}
 	}
-	if float64(rainy) < opt.MinFrac*float64(bs*bs) {
+	iw := m.padW + 1
+	m.sum = make([]float64, iw*(padH+1))
+	m.sum2 = make([]float64, iw*(padH+1))
+	for y := 0; y < padH; y++ {
+		var rs, rs2 float64
+		for x := 0; x < m.padW; x++ {
+			v := m.pad[y*m.padW+x]
+			rs += v
+			rs2 += v * v
+			m.sum[(y+1)*iw+x+1] = m.sum[y*iw+x+1] + rs
+			m.sum2[(y+1)*iw+x+1] = m.sum2[y*iw+x+1] + rs2
+		}
+	}
+	return m
+}
+
+// matchBuffers is per-worker scratch space.
+type matchBuffers struct {
+	tpl  []float64 // the block, mean removed
+	corr []float64
+}
+
+func (m *matcher) buffers() *matchBuffers {
+	bs, w := m.opt.BlockSize, 2*m.opt.Search+1
+	return &matchBuffers{tpl: make([]float64, bs*bs), corr: make([]float64, w*w)}
+}
+
+// match finds where the block at (x0, y0) in cur came from in prev. The
+// returned (dx, dy) is the displacement prev → cur in pixels.
+func (m *matcher) match(x0, y0 int, b *matchBuffers) (dx, dy float64, ok bool) {
+	opt := m.opt
+	bs := opt.BlockSize
+	n := float64(bs * bs)
+	rainy := 0
+	var tSum float64
+	for y := y0; y < y0+bs; y++ {
+		row := y * m.curW
+		for x := x0; x < x0+bs; x++ {
+			if m.curRain[row+x] {
+				rainy++
+			}
+			tSum += m.cur[row+x]
+		}
+	}
+	if float64(rainy) < opt.MinFrac*n {
 		return 0, 0, false
 	}
-	tMean, tStd := meanStd(tpl)
+	tMean := tSum / n
+	var tVar float64
+	k := 0
+	for y := y0; y < y0+bs; y++ {
+		row := m.cur[y*m.curW+x0 : y*m.curW+x0+bs]
+		for _, v := range row {
+			d := v - tMean
+			b.tpl[k] = d
+			tVar += d * d
+			k++
+		}
+	}
+	tStd := math.Sqrt(tVar / n)
 	if tStd == 0 {
 		return 0, 0, false
 	}
 
 	s := opt.Search
 	w := 2*s + 1
-	corr := make([]float64, w*w)
+	iw := m.padW + 1
 	best, bi, bj := math.Inf(-1), 0, 0
-	win := make([]float64, bs*bs)
 	for j := -s; j <= s; j++ {
 		for i := -s; i <= s; i++ {
-			k := 0
-			for y := y0; y < y0+bs; y++ {
-				for x := x0; x < x0+bs; x++ {
-					win[k] = intensity(prev.At(x-i, y-j))
-					k++
+			// The window in prev is (x0-i, y0-j) in grid coordinates,
+			// (x0-i+s, y0-j+s) in the padded image.
+			px, py := x0-i+s, y0-j+s
+			a, c := py*iw+px, (py+bs)*iw+px
+			sum := m.sum[c+bs] - m.sum[c] - m.sum[a+bs] + m.sum[a]
+			sum2 := m.sum2[c+bs] - m.sum2[c] - m.sum2[a+bs] + m.sum2[a]
+			wMean := sum / n
+			wVar := sum2/n - wMean*wMean
+			cc := math.Inf(-1)
+			if wVar > 1e-9 {
+				// Σ (t−t̄)(w−w̄) = Σ (t−t̄)·w, since Σ (t−t̄) = 0.
+				var dot float64
+				k := 0
+				for y := 0; y < bs; y++ {
+					row := m.pad[(py+y)*m.padW+px : (py+y)*m.padW+px+bs]
+					tr := b.tpl[k : k+bs]
+					for x, v := range row {
+						dot += tr[x] * v
+					}
+					k += bs
 				}
+				cc = dot / (n * tStd * math.Sqrt(wVar))
 			}
-			wMean, wStd := meanStd(win)
-			c := math.Inf(-1)
-			if wStd > 0 {
-				var sum float64
-				for k := range tpl {
-					sum += (tpl[k] - tMean) * (win[k] - wMean)
-				}
-				c = sum / (float64(len(tpl)) * tStd * wStd)
-			}
-			corr[(j+s)*w+(i+s)] = c
+			b.corr[(j+s)*w+(i+s)] = cc
 			// Prefer the smallest displacement on ties to stay stable over flat areas.
-			if c > best || (c == best && i*i+j*j < bi*bi+bj*bj) {
-				best, bi, bj = c, i, j
+			if cc > best || (cc == best && i*i+j*j < bi*bi+bj*bj) {
+				best, bi, bj = cc, i, j
 			}
 		}
 	}
@@ -158,7 +238,7 @@ func matchBlock(prev, cur *radar.Grid, x0, y0 int, opt Options) (dx, dy float64,
 		if i < -s || i > s || j < -s || j > s {
 			return math.Inf(-1)
 		}
-		return corr[(j+s)*w+(i+s)]
+		return b.corr[(j+s)*w+(i+s)]
 	}
 	dx = float64(bi) + subpixel(at(bi-1, bj), best, at(bi+1, bj))
 	dy = float64(bj) + subpixel(at(bi, bj-1), best, at(bi, bj+1))
@@ -312,3 +392,13 @@ func median(xs []float64) float64 {
 }
 
 func clamp(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
+
+// FromBlocks builds a field from per-block vectors (pixels per minute),
+// where valid marks blocks that were actually measured; the rest are filled
+// the same way as block matching fills them.
+func FromBlocks(blockSize, bw, bh int, v []Vector, valid []bool) *Field {
+	f := &Field{BlockSize: blockSize, BW: bw, BH: bh,
+		V: append([]Vector(nil), v...), Valid: append([]bool(nil), valid...)}
+	f.finish()
+	return f
+}

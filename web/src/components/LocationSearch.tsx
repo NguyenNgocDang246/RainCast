@@ -4,11 +4,17 @@ import { useEffect, useId, useState } from "react";
 import { geocode, suggest, type Place } from "@/lib/api";
 import { errorText, useLocale } from "@/lib/i18n";
 import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
+import { LocateIcon } from "./icons";
 
 type Props = {
   onSelect: (place: Place) => void;
+  /** The chosen place, however it was chosen (here or on the map); its name fills the input. */
+  value: Place | null;
   /** Suggestions near this point rank first (usually the current place). */
   near: Place | null;
+  /** Asks the browser for the user's position. */
+  onLocate: () => void;
+  locating: boolean;
 };
 
 const DEBOUNCE_MS = 300;
@@ -24,10 +30,15 @@ type Results = { query: string; places: Place[] };
 /** A dropdown row: a search match, or a place picked before. */
 type Item = { kind: "place" | "recent"; place: Place };
 
-export function LocationSearch({ onSelect, near }: Props) {
+const placeKey = (p: Place | null) => (p ? `${p.lat},${p.lon},${p.name}` : "");
+
+export function LocationSearch({ onSelect, value, near, onLocate, locating }: Props) {
   const { t } = useLocale();
   const listId = useId();
-  const [query, setQuery] = useState("");
+  const [query, setQuery] = useState(value?.name ?? "");
+  // True while the input shows the chosen place rather than the user's typing.
+  const [pristine, setPristine] = useState(true);
+  const [shownKey, setShownKey] = useState(placeKey(value));
   const [results, setResults] = useState<Results | null>(null);
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
@@ -39,17 +50,28 @@ export function LocationSearch({ onSelect, near }: Props) {
     typeof window === "undefined" ? [] : loadRecent(),
   );
 
+  // A place chosen elsewhere (the map) replaces the input's text.
+  const key = placeKey(value);
+  if (key !== shownKey) {
+    setShownKey(key);
+    setQuery(value?.name ?? "");
+    setPristine(true);
+    setResults(null);
+    setError(null);
+  }
+
   const q = query.trim();
+  const editing = !pristine && q !== "";
   const places = results && results.query === q ? results.places : [];
-  // Empty input shows recent searches; typing shows matches.
-  const items: Item[] = q
+  // Typing shows matches; otherwise recent searches.
+  const items: Item[] = editing
     ? places.map((place) => ({ kind: "place", place }))
     : recent.map((place) => ({ kind: "recent", place }));
   const showList = open && items.length > 0;
 
   // Suggest while typing, debounced; a newer keystroke aborts the older request.
   useEffect(() => {
-    if (q.length < MIN_CHARS || isLinkOrCoords(q)) return;
+    if (!editing || q.length < MIN_CHARS || isLinkOrCoords(q)) return;
     const ctrl = new AbortController();
     const timer = setTimeout(async () => {
       try {
@@ -64,12 +86,14 @@ export function LocationSearch({ onSelect, near }: Props) {
       clearTimeout(timer);
       ctrl.abort();
     };
-  }, [q, near]);
+  }, [editing, q, near]);
 
   const choose = (p: Place) => {
     setRecent(addRecent(p));
     setResults(null);
-    setQuery("");
+    // Shown at once, even when re-choosing the same place.
+    setQuery(p.name);
+    setPristine(true);
     setOpen(false);
     setError(null);
     onSelect(p);
@@ -106,7 +130,7 @@ export function LocationSearch({ onSelect, near }: Props) {
   const submit = (e?: React.SubmitEvent<HTMLFormElement>) => {
     e?.preventDefault();
     if (showList && active >= 0) return pick(items[active]);
-    search(q);
+    if (editing) search(q);
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -121,22 +145,33 @@ export function LocationSearch({ onSelect, near }: Props) {
     } else if (e.key === "Escape") {
       setOpen(false);
       setActive(-1);
+      // Drop the draft and show the chosen place again.
+      setQuery(value?.name ?? "");
+      setPristine(true);
+      setError(null);
     }
   };
 
   return (
-    <div className="relative w-full max-w-xl">
+    <div className="relative w-full">
       <form onSubmit={submit} className="flex gap-2" role="search">
         <input
           type="search"
           value={query}
           onChange={(e) => {
             setQuery(e.target.value);
+            setPristine(false);
             setOpen(true);
             setActive(-1);
             setError(null);
           }}
-          onFocus={() => setOpen(true)}
+          onFocus={(e) => {
+            setOpen(true);
+            // The map may have added a recent place meanwhile.
+            setRecent(loadRecent());
+            // Typing replaces the shown place.
+            if (pristine) e.target.select();
+          }}
           // The input keeps focus after a pick, so focus alone won't reopen.
           onClick={() => setOpen(true)}
           onBlur={() => setOpen(false)}
@@ -149,22 +184,32 @@ export function LocationSearch({ onSelect, near }: Props) {
           aria-controls={listId}
           aria-activedescendant={showList && active >= 0 ? `${listId}-${active}` : undefined}
           autoComplete="off"
-          className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 px-4 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none"
+          className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/30 px-4 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none [&::-webkit-search-cancel-button]:cursor-pointer"
         />
         <button
+          type="button"
+          onClick={onLocate}
+          disabled={locating}
+          title={t.locate.button}
+          aria-label={t.locate.button}
+          className="grid w-12 shrink-0 cursor-pointer place-items-center rounded-xl border border-slate-800 bg-slate-900 text-sky-400 shadow-lg shadow-black/30 transition hover:border-sky-500 hover:text-sky-300 disabled:cursor-wait"
+        >
+          <LocateIcon className={`size-5 ${locating ? "animate-spin" : ""}`} />
+        </button>
+        <button
           type="submit"
-          disabled={busy || !q}
-          className="rounded-xl bg-sky-500 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+          disabled={busy || !editing}
+          className="rounded-xl bg-sky-500 shadow-lg shadow-black/30 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed"
         >
           {busy ? t.search.busy : t.search.submit}
         </button>
       </form>
 
-      {error && <p className="mt-2 text-sm text-amber-300">{errorText(t, error)}</p>}
+      {error && <p className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-amber-300 shadow-lg">{errorText(t, error)}</p>}
 
       {showList && (
         <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">
-          {!q && (
+          {!editing && (
             <div className="flex items-center justify-between px-4 pt-3 pb-1 text-xs text-slate-500">
               <span>{t.search.recent}</span>
               <button

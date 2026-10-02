@@ -1,5 +1,3 @@
-import type { Forecast } from "./api";
-
 // Types mirror the Go admin API (internal/server/admin.go, internal/store).
 
 export type Scores = {
@@ -12,27 +10,6 @@ export type Scores = {
   pod: number | null;
   far: number | null;
   csi: number | null;
-};
-
-export type LeadStats = { lead_min: number; model: Scores; persistence: Scores; mae_dbz: number | null };
-
-/** Model with vs without intensity trend, on the forecasts that recorded both. */
-export type Comparison = {
-  leads: { lead_min: number; model: Scores; trend: Scores; persistence: Scores }[];
-  model: Scores;
-  trend: Scores;
-  persistence: Scores;
-};
-
-export type Accuracy = {
-  leads: LeadStats[];
-  model: Scores;
-  persistence: Scores;
-  shadow: Comparison | null;
-  arrival: { n: number; mae_min: number | null; bias_min: number | null };
-  issued: number;
-  verified: number;
-  generated_at: string;
 };
 
 export type Overview = {
@@ -48,67 +25,49 @@ export type Overview = {
     latest_frame: string | null;
     cached_regions: number;
   };
-  counts: { frames: number; stations: number; issues: number; forecasts: number; verified: number; lookups: number };
+  /** null when the API has no database. */
+  counts: { frames: number; regions: number } | null;
   geocoding: {
-    locationiq_enabled: boolean;
+    geoapify_enabled: boolean;
     cache_hits: number;
-    locationiq_ok: number;
-    locationiq_rate_limited: number;
-    locationiq_errors: number;
-    photon_ok: number;
-    photon_errors: number;
-    nominatim_ok: number;
-    nominatim_errors: number;
+    autocomplete_ok: number;
+    search_ok: number;
+    reverse_ok: number;
+    rate_limited: number;
+    errors: number;
+    tile_cache_hits: number;
+    tile_fetched: number;
+    tile_errors: number;
   };
-};
-
-export type LeadResult = {
-  lead_min: number;
-  pred_dbz: number;
-  pred_rain: boolean;
-  persist_rain: boolean;
-  obs_dbz: number | null;
-  obs_rain: boolean | null;
 };
 
 export type Station = { id: string; name: string; lat: number; lon: number };
 
-export type Issue = {
-  station: string;
-  issued_at: string;
-  arrival_min: number;
-  raining_now: boolean;
-  result: Forecast;
-  leads: LeadResult[];
-};
-
-/** obs: dBZ observed at each station (by id). */
-export type Frame = { time: string; path: string; obs: Record<string, number>; recorded_at: string };
-
-export type Lookup = {
-  id: number;
-  at: string;
-  lat: number;
-  lon: number;
-  frame_time: string;
-  raining_now: boolean;
-  arrival_min: number;
-  heavy_now: boolean;
-  heavy_arrival_min: number;
-  speed_kmh: number;
-  direction_deg: number;
-};
+/** A frame cmd/collect recorded; time is unix seconds. */
+export type Frame = { time: number; path: string };
 
 export type BacktestResult = {
-  /** Vietnamese label; build one from pairs/trend/baseline instead. */
+  /** Vietnamese label; build one from method/pairs/trend/baseline instead. */
   name: string;
   /** Missing in reports saved before these fields existed. */
+  method?: string;
   pairs?: number;
   trend?: boolean;
   baseline?: boolean;
-  leads: { lead_min: number; scores: Scores; mae_dbz: number | null }[];
+  leads: { lead_min: number; scores: Scores; mae_dbz: number | null; brier?: number | null }[];
   overall: Scores;
+  /** 95% bootstrap intervals; the delta is against report.reference. */
+  csi_ci?: [number, number];
+  delta_csi?: number;
+  delta_csi_ci?: [number, number];
+  brier?: number;
+  bss?: number;
+  brier_cal?: number;
+  auc?: number;
+  ms_per_issue?: number;
 };
+
+export type BacktestGroup = { climate: string; regions: number; issues: number; events: number; results: BacktestResult[] };
 
 export type BacktestReport = {
   generated_at: string;
@@ -120,9 +79,24 @@ export type BacktestReport = {
   from: number;
   to: number;
   results: BacktestResult[] | null;
+  /** Missing in reports from before multi-region collection. */
+  events?: number;
+  new_issues?: number;
+  blocks?: number;
+  reference?: string;
+  regions?: { name: string; climate: string; frames: number; skipped: number; issues: number; events: number; csi: (number | null)[] }[];
+  groups?: BacktestGroup[] | null;
 };
 
+/** GET /api/admin/backtest: the report `go run ./cmd/backtest` last wrote. */
+export type BacktestStatus = { report: BacktestReport | null };
+
+/** Rain events below which the backtest cannot tell methods apart (backtest.MinEvents). */
+export const MIN_EVENTS = 30;
+
 async function call(path: string, init?: RequestInit): Promise<Response> {
+  // Same origin: the admin page runs locally, next to the backend, through
+  // the Next rewrite.
   const res = await fetch(path, { cache: "no-store", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => null);

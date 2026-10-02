@@ -1,7 +1,8 @@
 import type { NextConfig } from "next";
 
-// The Go backend; requests to /api/* are proxied there so the browser never
-// talks to it directly (no CORS needed).
+// The Go backend for `next dev`: requests to /api/* are proxied there. On
+// Vercel the browser calls the backend directly (NEXT_PUBLIC_API_BASE).
+// Rewrites are baked in at build time.
 const apiUrl = process.env.API_URL ?? "http://localhost:8080";
 
 const nextConfig: NextConfig = {

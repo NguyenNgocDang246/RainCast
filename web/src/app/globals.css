@@ -14,3 +14,70 @@ body {
   color: #e2e8f0;
   font-family: var(--font-sans-vi), system-ui, sans-serif;
 }
+
+/* Weather backdrops (WeatherBackdrop.tsx): rain streaks, drifting clouds, sun. */
+@keyframes rain-fall {
+  from {
+    transform: translateY(-100px);
+  }
+  to {
+    transform: translateY(380px);
+  }
+}
+
+@keyframes cloud-drift {
+  from {
+    transform: translateX(-30px);
+  }
+  to {
+    transform: translateX(40px);
+  }
+}
+
+@keyframes sun-pulse {
+  from {
+    opacity: 0.55;
+    transform: scale(1);
+  }
+  to {
+    opacity: 0.9;
+    transform: scale(1.08);
+  }
+}
+
+.rain-streak {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  background: linear-gradient(to bottom, transparent, rgb(56 189 248));
+  animation: rain-fall 1.3s linear infinite backwards;
+}
+
+.sky-cloud {
+  position: absolute;
+  height: 56px;
+  border-radius: 9999px;
+  filter: blur(18px);
+  animation: cloud-drift 20s ease-in-out infinite alternate;
+}
+
+.sky-sun {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 160px;
+  height: 160px;
+  border-radius: 9999px;
+  background: radial-gradient(circle, rgb(253 224 71 / 0.35), rgb(52 211 153 / 0.12) 55%, transparent 70%);
+  animation: sun-pulse 6s ease-in-out infinite alternate;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rain-streak {
+    display: none;
+  }
+  .sky-cloud,
+  .sky-sun {
+    animation: none;
+  }
+}

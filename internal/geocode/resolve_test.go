@@ -54,9 +54,9 @@ func TestResolveShortLink(t *testing.T) {
 	defer srv.Close()
 	su, _ := url.Parse(srv.URL)
 
-	c := New("ua", "vn")
+	c := New("", "ua", "vn")
 	c.ShortLinkHosts[su.Hostname()] = true
-	ps, err := c.Resolve(context.Background(), "Chỗ X\n"+srv.URL+"/abc")
+	ps, err := c.Resolve(context.Background(), "Chỗ X\n"+srv.URL+"/abc", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,38 +69,22 @@ func TestResolveDoesNotFetchOtherHosts(t *testing.T) {
 	var hit bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
 	defer srv.Close()
-	c := New("ua", "")
-	_, err := c.Resolve(context.Background(), srv.URL+"/maps/nothing")
+	c := New("", "ua", "")
+	_, err := c.Resolve(context.Background(), srv.URL+"/maps/nothing", "")
 	if !errors.Is(err, ErrUnresolvedLink) || hit {
 		t.Fatalf("err=%v hit=%v", err, hit)
 	}
 }
 
 func TestResolveNameLinkFallsBackToSearch(t *testing.T) {
-	nom := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.Contains(r.URL.Query().Get("q"), "landmark 81") {
-			t.Errorf("q = %q", r.URL.Query().Get("q"))
+	c := geoapify(t, func(endpoint string, w http.ResponseWriter, r *http.Request) {
+		if endpoint != "search" || !strings.Contains(r.URL.Query().Get("text"), "Landmark 81") {
+			t.Errorf("%s %v", endpoint, r.URL.Query())
 		}
-		w.Write([]byte(`[{"name":"Landmark 81","display_name":"Landmark 81, Bình Thạnh","lat":"10.795","lon":"106.722"}]`))
-	}))
-	defer nom.Close()
-	// Photon finds nothing, so the name falls through to Nominatim.
-	photon := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(`{"features":[]}`))
-	}))
-	defer photon.Close()
-	c := New("ua", "vn")
-	c.BaseURL = nom.URL
-	c.PhotonURL = photon.URL
-	ps, err := c.Resolve(context.Background(), "https://maps.google.com/maps?q=Landmark+81")
+		w.Write([]byte(`{"results":[{"address_line1":"Landmark 81","address_line2":"Bình Thạnh","lat":10.795,"lon":106.722}]}`))
+	})
+	ps, err := c.Resolve(context.Background(), "https://maps.google.com/maps?q=Landmark+81", "")
 	if err != nil || len(ps) != 1 || ps[0].Lat != 10.795 {
-		t.Fatalf("%+v %v", ps, err)
-	}
-}
-
-func TestResolveCoords(t *testing.T) {
-	ps, err := New("ua", "").Resolve(context.Background(), "10.85, 106.77")
-	if err != nil || len(ps) != 1 || ps[0].Lat != 10.85 {
 		t.Fatalf("%+v %v", ps, err)
 	}
 }

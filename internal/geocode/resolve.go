@@ -25,11 +25,20 @@ var (
 )
 
 // Resolve accepts an address, a "lat, lon" pair or a Google Maps link
-// (full or maps.app.goo.gl short link) and returns candidate places.
-func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
+// (full or maps.app.goo.gl short link) and returns candidate places. Text
+// searches favor country (the user's ISO code, "" when unknown).
+func (c *Client) Resolve(ctx context.Context, input, country string) ([]Place, error) {
 	input = strings.TrimSpace(input)
 	if lat, lon, ok := ParseCoords(input); ok {
-		return []Place{{Name: fmt.Sprintf("%.5f, %.5f", lat, lon), Lat: lat, Lon: lon}}, nil
+		// The name is best-effort: the coordinates alone are enough.
+		p, err := c.Reverse(ctx, lat, lon)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if err != nil {
+			c.logf("reverse failed, using coordinates", "err", err)
+		}
+		return []Place{p}, nil
 	}
 	// Share sheets often copy "Place name\nhttps://maps.app.goo.gl/…".
 	if link := urlRe.FindString(input); link != "" {
@@ -37,7 +46,7 @@ func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
 	}
 	u, err := url.Parse(input)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return c.searchText(ctx, input)
+		return c.searchText(ctx, input, country)
 	}
 	if c.ShortLinkHosts[strings.ToLower(u.Hostname())] {
 		if u, err = c.expand(ctx, u); err != nil {
@@ -49,7 +58,7 @@ func (c *Client) Resolve(ctx context.Context, input string) ([]Place, error) {
 	case hasCoords:
 		return []Place{p}, nil
 	case p.Name != "":
-		return c.searchText(ctx, p.Name)
+		return c.searchText(ctx, p.Name, country)
 	default:
 		return nil, ErrUnresolvedLink
 	}
@@ -109,7 +118,7 @@ func ParseMapsURL(u *url.URL) (p Place, hasCoords bool) {
 
 func withDefaultName(p Place) Place {
 	if p.Name == "" {
-		p.Name = fmt.Sprintf("%.5f, %.5f", p.Lat, p.Lon)
+		p.Name = coordsPlace(p.Lat, p.Lon).Name
 	}
 	return p
 }

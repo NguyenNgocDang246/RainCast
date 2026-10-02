@@ -24,9 +24,12 @@ export function ToolsTab({ initial }: { initial: Target }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
+    // Forecasts need a location; there is no default one. Without a
+    // target the panels below are not shown.
+    if (!target) return;
     let cancelled = false;
     let url: string | null = null;
-    const q = target ? `?lat=${target.lat}&lon=${target.lon}` : "";
+    const q = `?lat=${target.lat}&lon=${target.lon}`;
     (async () => {
       try {
         const [f, u] = await Promise.all([
@@ -107,6 +110,9 @@ export function ToolsTab({ initial }: { initial: Target }) {
         {error && <ErrorText error={error} className="mt-3" />}
       </Panel>
 
+      {!target ? (
+        <p className="text-sm text-slate-500">{tt.pickPlace}</p>
+      ) : (
       <div className="grid gap-6 lg:grid-cols-2">
         <Panel title={tt.radarTitle}>
           {img ? (
@@ -124,6 +130,7 @@ export function ToolsTab({ initial }: { initial: Target }) {
           {forecast ? <ForecastDetail f={forecast} /> : <p className="animate-pulse text-sm text-slate-500">{t.admin.ui.loading}</p>}
         </Panel>
       </div>
+      )}
     </div>
   );
 }

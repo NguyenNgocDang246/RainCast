@@ -56,6 +56,30 @@ func (s *Scores) Add(pred, obs bool) {
 	}
 }
 
+// AddN records n identical forecast/observation pairs.
+func (s *Scores) AddN(pred, obs bool, n int) {
+	s.N += n
+	switch {
+	case pred && obs:
+		s.Hits += n
+	case !pred && obs:
+		s.Misses += n
+	case pred && !obs:
+		s.FalseAlarms += n
+	default:
+		s.CorrectNeg += n
+	}
+}
+
+// Merge adds o's counts; call Compute afterwards.
+func (s *Scores) Merge(o Scores) {
+	s.N += o.N
+	s.Hits += o.Hits
+	s.Misses += o.Misses
+	s.FalseAlarms += o.FalseAlarms
+	s.CorrectNeg += o.CorrectNeg
+}
+
 // Compute fills the derived scores from the counts.
 func (s *Scores) Compute() {
 	s.Accuracy = ratio(s.Hits+s.CorrectNeg, s.N)

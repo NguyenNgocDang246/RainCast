@@ -1,4 +1,4 @@
-package main
+package dotenv
 
 import (
 	"os"
@@ -15,7 +15,7 @@ func TestLoadDotEnv(t *testing.T) {
 		t.Cleanup(func() { os.Unsetenv(k) })
 	}
 
-	if err := loadDotEnv(path); err != nil {
+	if err := Load(path); err != nil {
 		t.Fatal(err)
 	}
 	for k, want := range map[string]string{"RC_A": "plain", "RC_B": "quoted value", "RC_C": "single", "RC_KEEP": "fromenv"} {
@@ -23,11 +23,11 @@ func TestLoadDotEnv(t *testing.T) {
 			t.Errorf("%s = %q, want %q", k, got, want)
 		}
 	}
-	if err := loadDotEnv(filepath.Join(t.TempDir(), "missing")); err != nil {
+	if err := Load(filepath.Join(t.TempDir(), "missing")); err != nil {
 		t.Errorf("missing file: %v", err)
 	}
 	os.WriteFile(path, []byte("oops\n"), 0o600)
-	if err := loadDotEnv(path); err == nil {
+	if err := Load(path); err == nil {
 		t.Error("malformed line should fail")
 	}
 }

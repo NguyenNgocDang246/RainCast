@@ -1,25 +1,20 @@
 // Package geocode turns free text, coordinates and map links into places.
-// Text goes to LocationIQ while within its quota, then Photon, with
-// Nominatim as a last resort for submitted searches. Every upstream is
-// rate-limited, identified by User-Agent and cached.
+// Text and reverse lookups go to Geoapify, rate-limited and cached; the API
+// key stays on the server.
 package geocode
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
-	"io"
 	"log/slog"
+	"math"
 	"net/http"
-	"net/url"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
-// DefaultBaseURL is the public OpenStreetMap Nominatim instance.
-const DefaultBaseURL = "https://nominatim.openstreetmap.org"
+// DefaultBaseURL is Geoapify's API host.
+const DefaultBaseURL = "https://api.geoapify.com"
 
 // Place is one search result.
 type Place struct {
@@ -29,19 +24,23 @@ type Place struct {
 	Lon     float64 `json:"lon"`
 }
 
-// Client queries LocationIQ, Photon and Nominatim.
+// LatLon is a point used to rank nearby results first.
+type LatLon struct{ Lat, Lon float64 }
+
+// Client queries Geoapify.
 type Client struct {
-	HTTP      *http.Client
-	BaseURL   string // Nominatim
-	PhotonURL string
-	// LocationIQKey enables LocationIQ; empty means Photon only.
-	LocationIQKey string
-	LocationIQURL string
-	Log           *slog.Logger // optional
-	UserAgent     string
-	Countries     string // comma-separated ISO codes limiting results; empty for worldwide
-	Language      string
-	Limit         int // results for a submitted search
+	HTTP    *http.Client
+	BaseURL string
+	// Key is the Geoapify API key; empty disables text search and reverse
+	// lookups (coordinates and map links still resolve).
+	Key       string
+	Log       *slog.Logger // optional
+	UserAgent string
+	// Countries are comma-separated ISO codes ranked first when the user's
+	// country is unknown; results elsewhere are still returned.
+	Countries string
+	Language  string
+	Limit     int // results for a submitted search
 	// SuggestLimit is the number of suggestions while typing.
 	SuggestLimit int
 	// Bias ranks results near this point first when the caller gives none.
@@ -53,10 +52,19 @@ type Client struct {
 	// fetch arbitrary URLs.
 	ShortLinkHosts map[string]bool
 
-	nominatimRate limiter
-	photonRate    limiter
-	liqQuota      quota
-	stats         counters
+	// Map tiles: Geoapify style name and where fetched tiles are kept
+	// (empty TileDir disables the disk cache), and how long a cached tile
+	// is used before it is fetched again (0 keeps tiles forever).
+	// TileMaxBytes caps the cache size (0 for no cap).
+	TileURL      string
+	TileStyle    string
+	TileDir      string
+	TileAge      time.Duration
+	TileMaxBytes int64
+
+	rate  limiter
+	pause coolDown
+	stats counters
 
 	mu    sync.Mutex
 	cache map[string]cached
@@ -67,53 +75,31 @@ type cached struct {
 	at     time.Time
 }
 
-// New returns a client with policy-compliant defaults.
-func New(userAgent, countries string) *Client {
+// New returns a client with defaults suited to Geoapify's free plan.
+func New(key, userAgent, countries string) *Client {
 	return &Client{
 		HTTP:      &http.Client{Timeout: 10 * time.Second},
 		BaseURL:   DefaultBaseURL,
-		PhotonURL: DefaultPhotonURL,
+		Key:       key,
 		UserAgent: userAgent,
 		Countries: countries,
 		Language:  "vi",
 		Limit:     5,
 
-		SuggestLimit:  6,
-		LocationIQURL: DefaultLocationIQURL,
-		// LocationIQ free plan: 2 requests/second, 60/minute.
-		liqQuota:      quota{perSec: 2, perMin: 60},
-		nominatimRate: limiter{interval: time.Second}, // Nominatim policy: max 1 req/s
-		// Photon has no hard limit but asks for fair use; typing is already
-		// debounced client-side.
-		photonRate: limiter{interval: 200 * time.Millisecond},
-		CacheTTL:   24 * time.Hour,
-		CacheMax:   1000,
-		cache:      map[string]cached{},
+		SuggestLimit: 6,
+		// Free plan: 5 requests/second.
+		rate:     limiter{interval: 200 * time.Millisecond},
+		CacheTTL: 24 * time.Hour,
+		CacheMax: 1000,
+		cache:    map[string]cached{},
 
 		ShortLinkHosts: map[string]bool{"maps.app.goo.gl": true, "goo.gl": true},
-	}
-}
 
-// Search queries Nominatim for up to Limit places matching q.
-func (c *Client) Search(ctx context.Context, q string) ([]Place, error) {
-	q = strings.ToLower(strings.Join(strings.Fields(q), " "))
-	if q == "" {
-		return []Place{}, nil
+		TileURL:      DefaultTileURL,
+		TileStyle:    "osm-liberty",
+		TileAge:      15 * 24 * time.Hour,
+		TileMaxBytes: 1 << 30,
 	}
-	key := "n:" + q
-	if p, ok := c.lookup(key); ok {
-		return p, nil
-	}
-	if err := c.nominatimRate.wait(ctx); err != nil {
-		return nil, err
-	}
-	places, err := c.fetch(ctx, q)
-	count(err, &c.stats.nominatimOK, &c.stats.nominatimErrors)
-	if err != nil {
-		return nil, err
-	}
-	c.store(key, places)
-	return places, nil
 }
 
 func (c *Client) lookup(key string) ([]Place, bool) {
@@ -165,53 +151,57 @@ func (l *limiter) wait(ctx context.Context) error {
 	return nil
 }
 
-type result struct {
-	Name        string `json:"name"`
-	DisplayName string `json:"display_name"`
-	Lat         string `json:"lat"`
-	Lon         string `json:"lon"`
+// coolDown refuses requests for a while after the upstream answered 429.
+type coolDown struct {
+	mu    sync.Mutex
+	until time.Time
 }
 
-func (c *Client) fetch(ctx context.Context, q string) ([]Place, error) {
-	v := url.Values{}
-	v.Set("q", q)
-	v.Set("format", "jsonv2")
-	v.Set("limit", strconv.Itoa(c.Limit))
-	if c.Countries != "" {
-		v.Set("countrycodes", c.Countries)
+func (p *coolDown) active(now time.Time) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return now.Before(p.until)
+}
+
+func (p *coolDown) extend(now time.Time, d time.Duration) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if u := now.Add(d); u.After(p.until) {
+		p.until = u
 	}
-	if c.Language != "" {
-		v.Set("accept-language", c.Language)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/search?"+v.Encode(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", c.UserAgent)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("geocode: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("geocode: http %d", resp.StatusCode)
-	}
-	var rs []result
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&rs); err != nil {
-		return nil, fmt.Errorf("geocode: %w", err)
-	}
-	places := make([]Place, 0, len(rs))
-	for _, r := range rs {
-		lat, err1 := strconv.ParseFloat(r.Lat, 64)
-		lon, err2 := strconv.ParseFloat(r.Lon, 64)
-		if err1 != nil || err2 != nil {
+}
+
+// joinUnique joins the non-empty parts that differ from name and each other.
+func joinUnique(name string, parts ...string) string {
+	seen := map[string]bool{strings.ToLower(name): true}
+	var out []string
+	for _, s := range parts {
+		k := strings.ToLower(strings.TrimSpace(s))
+		if k == "" || seen[k] {
 			continue
 		}
-		name := r.Name
-		if name == "" {
-			name, _, _ = strings.Cut(r.DisplayName, ",")
-		}
-		places = append(places, Place{Name: name, Address: r.DisplayName, Lat: lat, Lon: lon})
+		seen[k] = true
+		out = append(out, strings.TrimSpace(s))
 	}
-	return places, nil
+	return strings.Join(out, ", ")
+}
+
+// duplicate reports whether places has one with the same name within 300 m.
+// Names compare without case or spaces ("Megamall" vs "Mega Mall").
+func duplicate(places []Place, p Place) bool {
+	key := func(s string) string { return strings.ReplaceAll(strings.ToLower(s), " ", "") }
+	for _, q := range places {
+		if key(q.Name) == key(p.Name) && distanceM(q.Lat, q.Lon, p.Lat, p.Lon) < 300 {
+			return true
+		}
+	}
+	return false
+}
+
+func distanceM(lat1, lon1, lat2, lon2 float64) float64 {
+	const r = 6371000
+	rad := math.Pi / 180
+	dLat, dLon := (lat2-lat1)*rad, (lon2-lon1)*rad
+	a := math.Sin(dLat/2)*math.Sin(dLat/2) + math.Cos(lat1*rad)*math.Cos(lat2*rad)*math.Sin(dLon/2)*math.Sin(dLon/2)
+	return 2 * r * math.Asin(math.Sqrt(a))
 }

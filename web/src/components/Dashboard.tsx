@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
-import { fetchForecast, type Forecast, type Place } from "@/lib/api";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { fetchForecast, reverse, type Forecast, type Place } from "@/lib/api";
 import { errorText, useLocale } from "@/lib/i18n";
+import { addRecent } from "@/lib/recent";
 import { ForecastCard } from "./ForecastCard";
 import { Intro } from "./Intro";
 import { LanguageSwitch } from "./LanguageSwitch";
+import { LocationMap } from "./LocationMap";
 import { LocationSearch } from "./LocationSearch";
 
 const REFRESH_MS = 60_000;
@@ -51,26 +53,37 @@ function parsePlace(raw: string | null | undefined): Place | null | undefined {
   }
 }
 
+/** A fetch outcome, tagged with the point ("lat,lon") it belongs to. */
+type Result = { key: string; forecast: Forecast | null; error: string | null };
+
 export function Dashboard() {
   const { t } = useLocale();
   const raw = useSyncExternalStore(subscribe, readRaw, () => undefined);
   /** null = nothing chosen yet; undefined = not hydrated yet. */
   const place = useMemo(() => parsePlace(raw), [raw]);
-  const [forecast, setForecast] = useState<Forecast | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<Result | null>(null);
   const [now, setNow] = useState(() => Date.now());
+  const naming = useRef<AbortController | null>(null);
 
+  // Keyed by the point only: naming a picked point must not refetch.
+  const lat = place?.lat;
+  const lon = place?.lon;
+  const key = lat === undefined || lon === undefined ? null : `${lat},${lon}`;
   useEffect(() => {
-    if (!place) return; // no place chosen yet: the intro is shown instead
+    // No place chosen yet: the intro is shown instead.
+    if (lat === undefined || lon === undefined) return;
+    const k = `${lat},${lon}`;
     let cancelled = false;
     const load = async () => {
       try {
-        const f = await fetchForecast(place);
+        const f = await fetchForecast({ lat, lon });
         if (cancelled) return;
-        setForecast(f);
-        setError(null);
+        setResult({ key: k, forecast: f, error: null });
       } catch (e) {
-        if (!cancelled) setError(e instanceof Error ? e.message : String(e));
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : String(e);
+        // A failed refresh keeps the last good forecast for this point.
+        setResult((r) => ({ key: k, forecast: r?.key === k ? r.forecast : null, error: msg }));
       }
       if (!cancelled) setNow(Date.now());
     };
@@ -80,51 +93,121 @@ export function Dashboard() {
       cancelled = true;
       clearInterval(id);
     };
-  }, [place]);
+  }, [lat, lon]);
 
+  // Only a result fetched for the current point is shown, so moving the point
+  // (from any source, including another tab) shows loading instead of the old
+  // forecast; renaming the same point keeps it.
+  const current = result?.key === key ? result : null;
+  const forecast = current?.forecast ?? null;
+  const error = current?.error ?? null;
+
+  const [locating, setLocating] = useState(false);
+  const [locateError, setLocateError] = useState<string | null>(null);
+
+  /** Choosing any place clears a failed locate attempt. */
   const select = (p: Place | null) => {
-    // Re-selecting the current place keeps the shown forecast; the effect
-    // only reruns when the stored value actually changes.
-    if ((p ? JSON.stringify(p) : null) !== readRaw()) {
-      setForecast(null);
-      setError(null);
-    }
+    setLocateError(null);
     savePlace(p);
   };
 
+  /** A point from the map is used at once, then named when the lookup returns. */
+  const pickOnMap = async (pointLat: number, pointLon: number) => {
+    const round = (v: number) => Math.round(v * 1e5) / 1e5;
+    const p: Place = {
+      name: `${pointLat.toFixed(5)}, ${pointLon.toFixed(5)}`,
+      address: "",
+      lat: round(pointLat),
+      lon: round(pointLon),
+    };
+    naming.current?.abort();
+    const ctrl = new AbortController();
+    naming.current = ctrl;
+    select(p);
+    try {
+      const named = await reverse(p.lat, p.lon, ctrl.signal);
+      const cur = parsePlace(readRaw());
+      // Skip if another place was chosen meanwhile.
+      if (ctrl.signal.aborted || !cur || cur.lat !== p.lat || cur.lon !== p.lon) return;
+      // Keep the exact point; the server rounds it.
+      const full = { ...p, name: named.name || p.name, address: named.address };
+      addRecent(full);
+      select(full);
+    } catch {
+      // Naming is best-effort; the coordinates already work.
+    }
+  };
+
+  /** Uses the browser's position like a point picked on the map. */
+  const locate = () => {
+    if (!("geolocation" in navigator)) {
+      setLocateError(t.locate.failed);
+      return;
+    }
+    // Browsers only share the position with https pages (and localhost).
+    if (!window.isSecureContext) {
+      setLocateError(t.locate.insecure);
+      return;
+    }
+    setLocating(true);
+    setLocateError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLocating(false);
+        pickOnMap(pos.coords.latitude, pos.coords.longitude);
+      },
+      (err) => {
+        setLocating(false);
+        setLocateError(err.code === err.PERMISSION_DENIED ? t.locate.denied : t.locate.failed);
+      },
+      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+    );
+  };
+
+  // Google Maps layout: the map fills the screen above a thin footer; search
+  // and results float over it (left column on wide screens, bottom sheet on phones).
   return (
-    <main className="flex flex-1 flex-col items-center px-4 py-10">
-      <LanguageSwitch title="title" />
-      <LocationSearch onSelect={select} near={place ?? null} />
+    <main className="flex h-dvh flex-col overflow-hidden">
+      <div className="relative flex-1">
+        <LocationMap place={place ?? null} onPick={pickOnMap} />
+        <LanguageSwitch title="title" />
 
-      {place && (
-        <p className="mt-4 text-sm text-slate-400">
-          <span className="text-slate-200">{place.name}</span>
-          <button
-            type="button"
-            onClick={() => select(null)}
-            className="ml-3 text-sky-400 hover:underline cursor-pointer"
-          >
-            {t.dashboard.unselect}
-          </button>
-        </p>
-      )}
+        <div className="pointer-events-none absolute inset-x-0 top-0 bottom-0 z-10 flex flex-col justify-between gap-3 p-3 sm:inset-x-auto sm:left-0 sm:w-md sm:justify-start sm:p-4">
+          <div className="pointer-events-auto mr-20 sm:mr-0">
+            <LocationSearch
+              onSelect={select}
+              value={place ?? null}
+              near={place ?? null}
+              onLocate={locate}
+              locating={locating}
+            />
+          </div>
 
-      <div className="flex w-full flex-1 flex-col items-center justify-center py-12">
-        {place === null && <Intro />}
-        {place && forecast && <ForecastCard forecast={forecast} now={now} />}
-        {place && !forecast && !error && (
-          <p className="animate-pulse text-slate-500" aria-busy="true">
-            {t.dashboard.loading}
-          </p>
-        )}
-        {place && error && (
-          <p className="mt-8 max-w-md text-center text-sm text-amber-300">{errorText(t, error)}</p>
-        )}
+          <section className="pointer-events-auto max-h-[45dvh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/95 p-5 shadow-2xl shadow-black/40 backdrop-blur sm:max-h-none sm:min-h-0">
+            {locateError && <p className="mb-4 text-sm text-amber-300">{locateError}</p>}
+            {place === null && <Intro onLocate={locate} locating={locating} />}
+            {place && forecast && <ForecastCard forecast={forecast} now={now} />}
+            {place && !forecast && !error && (
+              <p className="animate-pulse text-slate-500" aria-busy="true">
+                {t.dashboard.loading}
+              </p>
+            )}
+            {place && error && <p className="text-sm text-amber-300">{errorText(t, error)}</p>}
+          </section>
+        </div>
       </div>
 
-      <footer className="text-center text-xs text-slate-600">
-        Radar: RainViewer · {t.dashboard.footerAddress}: ©{" "}
+      <footer className="shrink-0 border-t border-slate-800 px-4 py-1.5 text-center text-xs text-slate-600">
+        Radar: RainViewer · {t.dashboard.footerAddress}:{" "}
+        <a
+          href="https://www.geoapify.com/"
+          className="hover:text-slate-400"
+          target="_blank"
+          rel="noreferrer"
+        >
+          Geoapify
+        </a>
+        , ©{" "}
         <a
           href="https://www.openstreetmap.org/copyright"
           className="hover:text-slate-400"
@@ -133,7 +216,10 @@ export function Dashboard() {
         >
           OpenStreetMap
         </a>{" "}
-        contributors
+        contributors ·{" "}
+        <a href="https://db-ip.com" className="hover:text-slate-400" target="_blank" rel="noreferrer">
+          IP Geolocation by DB-IP
+        </a>
       </footer>
     </main>
   );
