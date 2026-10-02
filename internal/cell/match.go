@@ -46,25 +46,6 @@ func boxIoU(p, c Cell, dx, dy float64) float64 {
 	return inter / ((ax1-ax0)*(ay1-ay0) + (bx1-bx0)*(by1-by0) - inter)
 }
 
-// MatchNearest links every later cell to the cheapest earlier cell within
-// the gate. Several later cells may claim the same earlier one (a split),
-// which is also how it goes wrong when cells pass close by each other.
-func MatchNearest(prev, cur []Cell, field *motion.Field, minutes, gate float64) []Pair {
-	var out []Pair
-	for j, c := range cur {
-		best, bi := math.Inf(1), -1
-		for i, p := range prev {
-			if k := cost(p, c, field, minutes, gate); k < best {
-				best, bi = k, i
-			}
-		}
-		if bi >= 0 {
-			out = append(out, Pair{bi, j})
-		}
-	}
-	return out
-}
-
 // MatchHungarian finds the one-to-one assignment with the lowest total
 // cost; cells with no partner inside the gate stay unmatched.
 func MatchHungarian(prev, cur []Cell, field *motion.Field, minutes, gate float64) []Pair {

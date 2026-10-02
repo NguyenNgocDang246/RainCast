@@ -58,36 +58,6 @@ func TestHungarianOptimal(t *testing.T) {
 	}
 }
 
-// Two cells 20 px apart both move 14 px east: the leading edge of the
-// first lands next to where the second was. Nearest neighbor sends both to
-// the second cell; the optimal assignment keeps them apart.
-func TestHungarianBeatsNearestOnCloseCells(t *testing.T) {
-	prev, cur := radar.NewGrid(256, 128), radar.NewGrid(256, 128)
-	disc(prev, 100, 64, 6, 50)
-	disc(prev, 120, 64, 6, 50)
-	disc(cur, 114, 64, 6, 50)
-	disc(cur, 134, 64, 6, 50)
-	pc, cc := Segment(prev, 30, 16), Segment(cur, 30, 16)
-	if len(pc) != 2 || len(cc) != 2 {
-		t.Fatalf("cells: %d, %d", len(pc), len(cc))
-	}
-	right := func(pairs []Pair) bool {
-		ok := 0
-		for _, p := range pairs {
-			if math.Abs(cc[p.Cur].X-pc[p.Prev].X-14) < 1 {
-				ok++
-			}
-		}
-		return ok == 2 && len(pairs) == 2
-	}
-	if right(MatchNearest(pc, cc, nil, 10, 20)) {
-		t.Error("nearest neighbor unexpectedly got it right; the test no longer shows the difference")
-	}
-	if pairs := MatchHungarian(pc, cc, nil, 10, 20); !right(pairs) {
-		t.Errorf("hungarian pairs %v are wrong", pairs)
-	}
-}
-
 func TestKalmanVelocity(t *testing.T) {
 	xs, ys := []float64{}, []float64{}
 	noise := []float64{0.8, -1.1, 0.4, 1.0, -0.6, 0.2}
@@ -101,9 +71,9 @@ func TestKalmanVelocity(t *testing.T) {
 	}
 }
 
-// Two storms crossing the area flow at different headings: the cell field
-// moves each with its own velocity.
-func TestFieldFollowsEachCell(t *testing.T) {
+// Two storms crossing the area flow at different headings: each tracked
+// cell gets its own velocity.
+func TestTrackFollowsEachCell(t *testing.T) {
 	var frames []*radar.Grid
 	var pairs []*motion.Field
 	for k := range 4 {
@@ -115,35 +85,17 @@ func TestFieldFollowsEachCell(t *testing.T) {
 			pairs = append(pairs, still(384, 384))
 		}
 	}
-	for name, m := range map[string]Matcher{"nearest": MatchNearest, "hungarian": MatchHungarian} {
-		f := Field(frames, pairs, 10, DefaultOptions(m))
-		a, b := f.At(109, 100), f.At(260, 232)
-		if math.Abs(a.DX-0.3) > 0.06 || math.Abs(a.DY) > 0.06 {
-			t.Errorf("%s: east cell moves %+v, want (0.3, 0)", name, a)
-		}
-		if math.Abs(b.DX) > 0.06 || math.Abs(b.DY-0.4) > 0.06 {
-			t.Errorf("%s: south cell moves %+v, want (0, 0.4)", name, b)
-		}
+	cells, vel := Track(frames, pairs, 10, DefaultOptions(MatchHungarian))
+	if len(cells) != 2 {
+		t.Fatalf("tracked %d cells, want 2", len(cells))
 	}
-	// Hybrid keeps the base motion away from cells.
-	base := motion.FromBlocks(32, 12, 12, func() []motion.Vector {
-		v := make([]motion.Vector, 144)
-		for i := range v {
-			v[i] = motion.Vector{DX: -0.1}
+	for i, c := range cells {
+		want := motion.Vector{DX: 0.3}
+		if c.X > 200 {
+			want = motion.Vector{DY: 0.4}
 		}
-		return v
-	}(), func() []bool {
-		v := make([]bool, 144)
-		for i := range v {
-			v[i] = true
+		if math.Abs(vel[i].DX-want.DX) > 0.06 || math.Abs(vel[i].DY-want.DY) > 0.06 {
+			t.Errorf("cell at (%.0f, %.0f) moves %+v, want %+v", c.X, c.Y, vel[i], want)
 		}
-		return v
-	}())
-	h := Hybrid(frames, pairs, base, 10, DefaultOptions(MatchHungarian))
-	if v := h.At(20, 350); math.Abs(v.DX+0.1) > 1e-9 {
-		t.Errorf("hybrid away from cells = %+v, want the base motion", v)
-	}
-	if v := h.At(109, 100); math.Abs(v.DX-0.3) > 0.1 {
-		t.Errorf("hybrid at the east cell = %+v, want the cell's motion", v)
 	}
 }

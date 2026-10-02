@@ -12,8 +12,7 @@ import (
 
 // methodNames label the methods in reports and the CLI.
 var methodNames = map[string]string{
-	MethodTREC: "TREC", MethodCOTREC: "COTREC", MethodHS: "Horn–Schunck", MethodLK: "Lucas–Kanade",
-	MethodCellNN: "Cell NN", MethodCellHung: "Cell Hungarian", MethodHybrid: "Hybrid",
+	MethodTREC: "TREC", MethodHS: "Horn–Schunck", MethodLK: "Lucas–Kanade",
 	MethodMean: "Ensemble TB", MethodVote: "Ensemble bỏ phiếu",
 }
 
@@ -23,7 +22,7 @@ const motionPairs = 4
 
 // DefaultConfig scores TREC over 1–8 frame pairs, every other method at 4
 // pairs, each with and without the intensity trend, and the ensembles of
-// the seven methods. TREC with 4 pairs, what the app serves, is the
+// the three methods. TREC with 4 pairs, what the app serves, is the
 // reference.
 func DefaultConfig(step int) Config {
 	cfg := Config{
@@ -44,7 +43,7 @@ func DefaultConfig(step int) Config {
 		cfg.Variants = append(cfg.Variants, Variant{Name: name(MethodTREC, p, false), Method: MethodTREC, Pairs: p})
 	}
 	cfg.Reference = name(MethodTREC, motionPairs, false)
-	methods := []string{MethodTREC, MethodCOTREC, MethodHS, MethodLK, MethodCellNN, MethodCellHung, MethodHybrid}
+	methods := []string{MethodTREC, MethodHS, MethodLK}
 	var plain, trended []string
 	for _, m := range methods {
 		plain = append(plain, name(m, motionPairs, false))
@@ -54,19 +53,16 @@ func DefaultConfig(step int) Config {
 		}
 		cfg.Variants = append(cfg.Variants, Variant{Name: name(m, motionPairs, true), Method: m, Pairs: motionPairs, Trend: true})
 	}
-	// Weighted ensembles of the four best motion fields, learned per fold.
+	// Weighted ensembles of the motion fields, learned per fold.
 	top := []string{name(MethodLK, motionPairs, false), name(MethodHS, motionPairs, false),
-		name(MethodTREC, motionPairs, false), name(MethodCOTREC, motionPairs, false)}
+		name(MethodTREC, motionPairs, false)}
 	cfg.WeightMembers = top
 	cfg.Variants = append(cfg.Variants,
-		// model.Default, with and without the trend.
-		Variant{Name: "Ensemble chọn lọc", Method: MethodWeighted, Members: top[:3], Weighting: WeightEqual},
-		Variant{Name: "Ensemble chọn lọc + xu hướng", Method: MethodWeighted, Trend: true, Weighting: WeightEqual,
-			Members: []string{name(MethodLK, motionPairs, true), name(MethodHS, motionPairs, true), name(MethodTREC, motionPairs, true)}},
 		Variant{Name: "Ensemble trọng số kỹ năng", Method: MethodWeighted, Members: top, Weighting: WeightSkill},
 		Variant{Name: "Ensemble trọng số theo mốc", Method: MethodWeighted, Members: top, Weighting: WeightLead},
 		Variant{Name: "Ensemble hồi quy", Method: MethodWeighted, Members: top, Weighting: WeightRegress},
 	)
+	// The equal mean of the three, with and without the trend, is model.Default.
 	cfg.Variants = append(cfg.Variants,
 		Variant{Name: methodNames[MethodMean], Method: MethodMean, Members: plain},
 		Variant{Name: methodNames[MethodMean] + " + xu hướng", Method: MethodMean, Members: trended, Trend: true},

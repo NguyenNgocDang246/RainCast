@@ -161,12 +161,8 @@ export const en: Dict = {
       variant: (pairs, trend) => `${pairs} ${pairs === 1 ? "pair" : "pairs"}${trend ? " + trend" : ""}`,
       methods: {
         trec: "TREC",
-        cotrec: "COTREC",
         hs: "Horn–Schunck",
         lk: "Lucas–Kanade",
-        "cell-nn": "Cell NN",
-        "cell-hung": "Cell Hungarian",
-        hybrid: "Hybrid",
         ensemble: "Ensemble mean",
         vote: "Ensemble vote",
       },

@@ -49,15 +49,11 @@ type Region struct {
 // the same semi-Lagrangian nowcast extrapolates along, and the ensembles
 // the backtest builds from their forecasts.
 const (
-	MethodTREC     = model.TREC
-	MethodCOTREC   = model.COTREC
-	MethodHS       = model.HS
-	MethodLK       = model.LK
-	MethodCellNN   = model.CellNN
-	MethodCellHung = model.CellHung
-	MethodHybrid   = model.Hybrid
-	MethodMean     = "ensemble" // mean of the members' dBZ and probability
-	MethodVote     = "vote"     // share of members forecasting rain
+	MethodTREC = model.TREC
+	MethodHS   = model.HS
+	MethodLK   = model.LK
+	MethodMean = "ensemble" // mean of the members' dBZ and probability
+	MethodVote = "vote"     // share of members forecasting rain
 )
 
 // Variant is one forecast setting to score.

@@ -34,7 +34,8 @@ type Model struct {
 // events (October 2026), the mean without trend beat each member alone,
 // Lucas–Kanade by 0.8 CSI points and TREC by 1.5, in every climate group,
 // and learned weights did no better than equal ones; adding the trend
-// lifted the broader seven-method mean by another 0.8. Re-run
+// lifted the broader seven-method mean (since trimmed to these three) by
+// another 0.8. Re-run
 // cmd/backtest -fresh as data accumulates to check it still leads.
 func Default() Model {
 	return Model{Name: "ensemble", Trend: true, Members: []Member{

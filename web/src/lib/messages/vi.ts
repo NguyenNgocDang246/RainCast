@@ -165,12 +165,8 @@ export const vi = {
       variant: (pairs: number, trend: boolean) => `${pairs} cặp${trend ? " + xu hướng" : ""}`,
       methods: {
         trec: "TREC",
-        cotrec: "COTREC",
         hs: "Horn–Schunck",
         lk: "Lucas–Kanade",
-        "cell-nn": "Cell NN",
-        "cell-hung": "Cell Hungarian",
-        hybrid: "Hybrid",
         ensemble: "Ensemble trung bình",
         vote: "Ensemble bỏ phiếu",
       } as Record<string, string>,
