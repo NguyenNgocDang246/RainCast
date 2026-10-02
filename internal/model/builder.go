@@ -8,6 +8,7 @@ package model
 import (
 	"sync"
 
+	"raincast/internal/cell"
 	"raincast/internal/flow"
 	"raincast/internal/motion"
 	"raincast/internal/radar"
@@ -213,6 +214,24 @@ func (b *Builder) Accel(method string, t int64, pairs int) *motion.Field {
 		return nil
 	}
 	return motion.Accel(newer, older, (tn-to)/60)
+}
+
+// Storms follows the convective cells of frame t back through up to pairs
+// earlier frames along field.
+func (b *Builder) Storms(t int64, field *motion.Field, pairs int) []cell.Storm {
+	if field == nil {
+		return nil
+	}
+	times := b.chain(t, pairs)
+	if len(times) < 2 {
+		return nil
+	}
+	frames := make([]*radar.Grid, len(times))
+	for k, ft := range times {
+		frames[len(times)-1-k] = b.Grid(ft) // oldest first
+	}
+	minutes := float64(times[0]-times[1]) / 60
+	return cell.Lifecycle(frames, field, minutes, cell.DefaultOptions(cell.MatchHungarian))
 }
 
 // Trend is the intensity growth along field at frame t, measured over two

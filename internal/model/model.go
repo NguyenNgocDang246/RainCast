@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 
+	"raincast/internal/cell"
 	"raincast/internal/motion"
 	"raincast/internal/nowcast"
 	"raincast/internal/radar"
@@ -29,6 +30,10 @@ type Model struct {
 	// Trend lets echoes grow or weaken as they travel, each member along
 	// its own motion.
 	Trend bool
+	// Storm, with Trend, follows convective cells through the frames along
+	// each member's motion and sets the trend over each cell from its
+	// life: growing or decaying, newly formed, merged or split.
+	Storm bool
 }
 
 // Default is the model the app forecasts with: the equal mean of
@@ -79,6 +84,9 @@ type Prepared struct {
 	trends  []*motion.Trend
 	accels  []*motion.Field // nil for members without acceleration
 	weights []float64
+	// Storms are the cells the first usable member followed, for reporting
+	// those near a point; nil unless the model uses Storm.
+	Storms []StormInfo
 	// Used is the most frames any member's motion used.
 	Used int
 	// Display is the members' mean motion, for drawing.
@@ -93,6 +101,7 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 	fields := make([]*motion.Field, n)
 	trends := make([]*motion.Trend, n)
 	accels := make([]*motion.Field, n)
+	storms := make([][]cell.Storm, n)
 	used := make([]int, n)
 	var wg sync.WaitGroup
 	for i, mem := range m.Members {
@@ -101,6 +110,10 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 			defer wg.Done()
 			fields[i], used[i] = b.Field(mem.Method, t, mem.Pairs)
 			trends[i] = b.Trend(t, fields[i], rainDBZ)
+			if m.Storm && trends[i] != nil {
+				storms[i] = b.Storms(t, fields[i], mem.Pairs)
+				trends[i] = cell.AdjustTrend(trends[i], storms[i], b.Grid(t).W)
+			}
 			if mem.Accel {
 				accels[i] = b.Accel(mem.Method, t, mem.Pairs)
 			}
@@ -116,6 +129,9 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 		p.fields = append(p.fields, f)
 		p.trends = append(p.trends, trends[i])
 		p.accels = append(p.accels, accels[i])
+		if m.Storm && p.Storms == nil {
+			p.Storms = stormInfo(storms[i])
+		}
 		p.weights = append(p.weights, m.Members[i].Weight)
 		sum += m.Members[i].Weight
 		p.Used = max(p.Used, used[i])
@@ -211,4 +227,41 @@ func mean(fields []*motion.Field, weights []float64) *motion.Field {
 	}
 	out.Global = motion.Vector{DX: gx, DY: gy}
 	return out
+}
+
+// StormInfo is what is reported about a followed cell.
+type StormInfo struct {
+	X, Y     float64 // centroid, pixels
+	Peak     float32 // dBZ
+	RateDBZ  float64 // dBZ/min
+	New      bool
+	Merged   bool
+	Split    bool
+	Decaying bool
+}
+
+func stormInfo(storms []cell.Storm) []StormInfo {
+	out := make([]StormInfo, 0, len(storms))
+	for _, s := range storms {
+		out = append(out, StormInfo{X: s.X, Y: s.Y, Peak: s.Peak, RateDBZ: s.RateDBZ,
+			New: s.New, Merged: s.Merged, Split: s.Split, Decaying: s.Decaying})
+	}
+	return out
+}
+
+// growingRate is the dBZ/min above which a followed cell counts as building.
+const growingRate = 0.2
+
+// Nearby counts, within r pixels of (x, y), the cells that are building:
+// newly formed or merged, or strengthening by growingRate or more.
+func (p *Prepared) Nearby(x, y, r float64) (building int) {
+	for _, s := range p.Storms {
+		if math.Hypot(s.X-x, s.Y-y) > r || s.Decaying {
+			continue
+		}
+		if s.New || s.Merged || s.RateDBZ >= growingRate {
+			building++
+		}
+	}
+	return building
 }

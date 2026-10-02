@@ -128,30 +128,35 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 
 		fc := make([]forecast, nVar)
 		base := nowcast.Options{Horizon: horizon, Threshold: cfg.Threshold, Radius: cfg.Radius, ProbRadius: probRadius}
-		run := func(v int, field func() nowcastField, trend bool, accel func() *motion.Field) {
+		// run forecasts with variant v's motion and upgrades; persistence is
+		// the zero Variant, which has no motion.
+		run := func(i int, v Variant) {
 			start := time.Now()
 			f := newForecast(len(cfg.Leads), len(points))
 			opt := base
-			fld := field()
-			if trend && fld.field != nil {
-				opt.Trend = w.trend(t, fld.field)
+			var field *motion.Field
+			if v.Method != "" {
+				field = w.field(v.Method, t, v.Pairs)
+			}
+			if field != nil && v.Trend {
+				opt.Trend = w.trend(t, v.Method, v.Pairs, v.Storm)
 				opt.TrendTau = cfg.TrendTau
 			}
-			if accel != nil && fld.field != nil {
-				opt.Accel = accel()
+			if field != nil && v.Accel {
+				opt.Accel = w.accel(v.Method, t, v.Pairs)
 			}
 			for pi, p := range points {
-				res := nowcast.Forecast(cur.Grid, fld.field, p[0], p[1], opt)
+				res := nowcast.Forecast(cur.Grid, field, p[0], p[1], opt)
 				for li, l := range cfg.Leads {
 					f.dbz[li][pi] = res.At(l)
 					f.prob[li][pi] = res.ProbAt(l)
 				}
 			}
-			fc[v] = f
-			b.Nanos[v] += int64(time.Since(start))
+			fc[i] = f
+			b.Nanos[i] += int64(time.Since(start))
 		}
 		// Persistence: the echo now, everywhere in the future.
-		run(0, func() nowcastField { return nowcastField{} }, false, nil)
+		run(0, Variant{})
 		for vi, v := range cfg.Variants {
 			i := vi + 1
 			switch v.Method {
@@ -164,11 +169,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 				fc[i] = combineWeighted(fc, v, byName, reg.Name, cfg.Weights, len(cfg.Leads), len(points))
 				b.Nanos[i] += int64(time.Since(start))
 			default:
-				var accel func() *motion.Field
-				if v.Accel {
-					accel = func() *motion.Field { return w.accel(v.Method, t, v.Pairs) }
-				}
-				run(i, func() nowcastField { return nowcastField{w.field(v.Method, t, v.Pairs)} }, v.Trend, accel)
+				run(i, v)
 			}
 		}
 
@@ -246,9 +247,6 @@ func addAccum(acc [][]leadAcc, fc []forecast, obs [][]float32, leads []int) {
 		}
 	}
 }
-
-// nowcastField wraps a possibly nil field (persistence has none).
-type nowcastField struct{ field *motion.Field }
 
 // combine averages the members' forecasts (MethodMean), or turns their
 // rain/no-rain answers into a probability (MethodVote, with the mean dBZ).

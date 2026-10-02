@@ -44,6 +44,9 @@ export function ForecastCard({ forecast: f, now }: Props) {
         {v.tone !== "dry" && (f.accum_mm ?? 0) >= 0.1 && (
           <p className="mt-2 text-sm text-slate-400">{t.forecast.accum(mm(f.accum_mm ?? 0, locale))}</p>
         )}
+        {(f.storms_nearby ?? 0) > 0 && (
+          <p className="mt-2 text-sm text-amber-300/90">{t.forecast.storms(f.storms_nearby ?? 0)}</p>
+        )}
         <p className="mt-6 text-xs text-slate-500">
           {t.forecast.radarAt(clock(frameMs, locale))}
           {/* Motion is of the echoes nearby; with no rain coming it only confuses. */}

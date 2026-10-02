@@ -62,6 +62,8 @@ export const vi = {
   forecast: {
     radarAt: (clock: string) => `Radar lúc ${clock}`,
     accum: (mm: string) => `Lượng mưa ước tính khoảng ${mm} mm trong 1 giờ tới`,
+    storms: (n: number) =>
+      `${n === 1 ? "Một khối dông" : `${n} khối dông`} đang hình thành hoặc mạnh lên trong vòng 15 km — dông mới có thể xuất hiện mà radar chưa kịp thấy hướng đi.`,
     moving: (dir: string, kmh: string) => ` · mưa đang di chuyển về hướng ${dir}, ${kmh} km/h`,
     about: (clock: string) => `Khoảng ${clock}`,
 
@@ -174,6 +176,7 @@ export const vi = {
       pairsSuffix: (pairs: number) => ` ${pairs} cặp`,
       trendSuffix: " + xu hướng",
       accelSuffix: " + gia tốc",
+      stormSuffix: " + khối mưa",
       csiCi: "CSI tổng [95%]",
       delta: "Δ so với TREC 4 cặp",
       bss: "BSS",
@@ -183,7 +186,7 @@ export const vi = {
       better: "chắc chắn tốt hơn",
       worse: "chắc chắn kém hơn",
       intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
-      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi; “+ gia tốc” cho mưa tiếp tục nhanh/chậm dần như vừa qua. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
+      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi; “+ gia tốc” cho mưa tiếp tục nhanh/chậm dần như vừa qua; “+ khối mưa” chỉnh xu hướng theo vòng đời từng khối dông (mới sinh, hợp, tách, tan). Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
     },
 
     history: {

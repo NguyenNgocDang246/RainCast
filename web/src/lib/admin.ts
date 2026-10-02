@@ -54,6 +54,7 @@ export type BacktestResult = {
   pairs?: number;
   trend?: boolean;
   accel?: boolean;
+  storm?: boolean;
   baseline?: boolean;
   leads: { lead_min: number; scores: Scores; mae_dbz: number | null; brier?: number | null }[];
   overall: Scores;

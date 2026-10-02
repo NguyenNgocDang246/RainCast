@@ -99,3 +99,115 @@ func TestTrackFollowsEachCell(t *testing.T) {
 		}
 	}
 }
+
+func frames(n int, draw func(k int, g *radar.Grid)) []*radar.Grid {
+	out := make([]*radar.Grid, n)
+	for k := range out {
+		out[k] = radar.NewGrid(256, 256)
+		draw(k, out[k])
+	}
+	return out
+}
+
+func lifeOpt() Options { return DefaultOptions(MatchHungarian) }
+
+// One elongated cell breaks into two: both pieces are splits of it.
+func TestLifecycleSplit(t *testing.T) {
+	fs := frames(2, func(k int, g *radar.Grid) {
+		if k == 0 {
+			disc(g, 100, 100, 9, 50)
+			disc(g, 114, 100, 9, 50)
+		} else {
+			disc(g, 94, 100, 7, 50)
+			disc(g, 120, 100, 7, 50)
+		}
+	})
+	s := Lifecycle(fs, still(256, 256), 10, lifeOpt())
+	if len(s) != 2 || !s[0].Split || !s[1].Split || s[0].New || s[0].Merged {
+		t.Fatalf("storms %+v, want two splits", flags(s))
+	}
+}
+
+// Two cells flow into one.
+func TestLifecycleMerge(t *testing.T) {
+	fs := frames(2, func(k int, g *radar.Grid) {
+		if k == 0 {
+			disc(g, 94, 100, 7, 50)
+			disc(g, 120, 100, 7, 50)
+		} else {
+			disc(g, 100, 100, 9, 50)
+			disc(g, 114, 100, 9, 50)
+		}
+	})
+	s := Lifecycle(fs, still(256, 256), 10, lifeOpt())
+	if len(s) != 1 || !s[0].Merged || s[0].Split || s[0].New {
+		t.Fatalf("storms %+v, want one merge", flags(s))
+	}
+}
+
+// A cell moving east along the field and strengthening 4 dBZ per frame is
+// followed back through every frame, growing at 0.4 dBZ/min; a cell
+// appearing in the last frame is new.
+func TestLifecycleGrowthAndBirth(t *testing.T) {
+	fs := frames(3, func(k int, g *radar.Grid) {
+		disc(g, 60+5*float64(k), 80, 8, 40+4*float64(k))
+		if k == 2 {
+			disc(g, 180, 180, 6, 45)
+		}
+	})
+	east := motion.FromBlocks(32, 8, 8, func() []motion.Vector {
+		v := make([]motion.Vector, 64)
+		for i := range v {
+			v[i] = motion.Vector{DX: 0.5}
+		}
+		return v
+	}(), func() []bool {
+		v := make([]bool, 64)
+		for i := range v {
+			v[i] = true
+		}
+		return v
+	}())
+	s := Lifecycle(fs, east, 10, lifeOpt())
+	if len(s) != 2 {
+		t.Fatalf("%d storms, want 2", len(s))
+	}
+	grow, born := s[0], s[1]
+	if grow.X > born.X {
+		grow, born = born, grow
+	}
+	if grow.Age != 3 || grow.New || math.Abs(grow.RateDBZ-0.4) > 0.05 || grow.Decaying {
+		t.Errorf("growing cell %+v, want age 3 at 0.4 dBZ/min", flags([]Storm{grow}))
+	}
+	if !born.New || born.Age != 1 {
+		t.Errorf("new cell %+v, want new", flags([]Storm{born}))
+	}
+
+	// The trend follows the storms where they cover a block.
+	tr := &motion.Trend{BlockSize: 32, BW: 8, BH: 8, R: make([]float64, 64)}
+	adj := AdjustTrend(tr, s, 256)
+	if r := adj.R[(80/32)*8+70/32]; math.Abs(r-0.4) > 0.05 {
+		t.Errorf("trend at the growing cell %.2f, want ≈ 0.4", r)
+	}
+	if r := adj.R[(180/32)*8+180/32]; r < initRate-1e-9 {
+		t.Errorf("trend at the new cell %.2f, want at least %.2f", r, initRate)
+	}
+	if adj.R[0] != 0 || tr.R[(180/32)*8+180/32] != 0 {
+		t.Error("blocks without storms changed, or the input trend was modified")
+	}
+}
+
+type flagView struct {
+	X, Y                    float64
+	Age                     int
+	New, Merged, Split, Dec bool
+	Rate                    float64
+}
+
+func flags(s []Storm) []flagView {
+	var out []flagView
+	for _, x := range s {
+		out = append(out, flagView{x.X, x.Y, x.Age, x.New, x.Merged, x.Split, x.Decaying, x.RateDBZ})
+	}
+	return out
+}

@@ -60,6 +60,8 @@ export const en: Dict = {
   forecast: {
     radarAt: (clock) => `Radar at ${clock}`,
     accum: (mm) => `About ${mm} mm of rain expected over the next hour`,
+    storms: (n) =>
+      `${n === 1 ? "A storm cell is" : `${n} storm cells are`} forming or strengthening within 15 km — new storms can pop up before radar shows where they go.`,
     moving: (dir, kmh) => ` · rain moving ${dir}, ${kmh} km/h`,
     about: (clock) => `Around ${clock}`,
 
@@ -170,6 +172,7 @@ export const en: Dict = {
       pairsSuffix: (pairs) => ` ${pairs} ${pairs === 1 ? "pair" : "pairs"}`,
       trendSuffix: " + trend",
       accelSuffix: " + acceleration",
+      stormSuffix: " + storm lives",
       csiCi: "Overall CSI [95%]",
       delta: "Δ vs TREC 4 pairs",
       bss: "BSS",
@@ -179,7 +182,7 @@ export const en: Dict = {
       better: "surely better",
       worse: "surely worse",
       intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
-      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening; “+ acceleration” lets rain keep speeding up or slowing down as it just did. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
+      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening; “+ acceleration” lets rain keep speeding up or slowing down as it just did; “+ storm lives” sets the trend from each storm cell's life (forming, merging, splitting, decaying). Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
     },
 
     history: {

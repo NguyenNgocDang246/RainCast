@@ -21,7 +21,8 @@ var methodNames = map[string]string{
 const motionPairs = 4
 
 // DefaultConfig scores TREC over 1–8 frame pairs and every method at 4
-// pairs up a ladder of upgrades (plain, + trend, + trend + acceleration),
+// pairs plain, + trend, and each upgrade on top of the trend on its own
+// (+ acceleration, + storm lives), so each method's gain from each shows;
 // and the ensembles of the three methods. TREC with 4 pairs, what the app serves, is the
 // reference.
 func DefaultConfig(step int) Config {
@@ -29,7 +30,7 @@ func DefaultConfig(step int) Config {
 		Leads: []int{10, 20, 30, 40, 50, 60}, Threshold: 20, Radius: 2, TrendTau: 20,
 		Step: step, StepSec: 600, EventRain: 0.02, EventFrames: 6,
 	}
-	name := func(method string, pairs int, trend bool, accel ...bool) string {
+	name := func(method string, pairs int, trend bool, up ...string) string {
 		n := methodNames[method]
 		if method == MethodTREC {
 			n = fmt.Sprintf("TREC %d cặp", pairs)
@@ -37,8 +38,8 @@ func DefaultConfig(step int) Config {
 		if trend {
 			n += " + xu hướng"
 		}
-		if len(accel) > 0 && accel[0] {
-			n += " + gia tốc"
+		for _, u := range up {
+			n += " + " + u
 		}
 		return n
 	}
@@ -47,17 +48,19 @@ func DefaultConfig(step int) Config {
 	}
 	cfg.Reference = name(MethodTREC, motionPairs, false)
 	methods := []string{MethodTREC, MethodHS, MethodLK}
-	var plain, trended, accel []string
+	var plain, trended, accel, storm []string
 	for _, m := range methods {
 		plain = append(plain, name(m, motionPairs, false))
 		trended = append(trended, name(m, motionPairs, true))
-		accel = append(accel, name(m, motionPairs, true, true))
+		accel = append(accel, name(m, motionPairs, true, "gia tốc"))
+		storm = append(storm, name(m, motionPairs, true, "khối mưa"))
 		if m != MethodTREC {
 			cfg.Variants = append(cfg.Variants, Variant{Name: name(m, motionPairs, false), Method: m, Pairs: motionPairs})
 		}
 		cfg.Variants = append(cfg.Variants,
 			Variant{Name: name(m, motionPairs, true), Method: m, Pairs: motionPairs, Trend: true},
-			Variant{Name: name(m, motionPairs, true, true), Method: m, Pairs: motionPairs, Trend: true, Accel: true})
+			Variant{Name: name(m, motionPairs, true, "gia tốc"), Method: m, Pairs: motionPairs, Trend: true, Accel: true},
+			Variant{Name: name(m, motionPairs, true, "khối mưa"), Method: m, Pairs: motionPairs, Trend: true, Storm: true})
 	}
 	// Weighted ensembles of the motion fields, learned per fold.
 	top := []string{name(MethodLK, motionPairs, false), name(MethodHS, motionPairs, false),
@@ -73,6 +76,7 @@ func DefaultConfig(step int) Config {
 		Variant{Name: methodNames[MethodMean], Method: MethodMean, Members: plain},
 		Variant{Name: methodNames[MethodMean] + " + xu hướng", Method: MethodMean, Members: trended, Trend: true},
 		Variant{Name: methodNames[MethodMean] + " + xu hướng + gia tốc", Method: MethodMean, Members: accel, Trend: true, Accel: true},
+		Variant{Name: methodNames[MethodMean] + " + xu hướng + khối mưa", Method: MethodMean, Members: storm, Trend: true, Storm: true},
 		Variant{Name: methodNames[MethodVote], Method: MethodVote, Members: plain},
 	)
 	return cfg

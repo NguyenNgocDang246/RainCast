@@ -104,6 +104,9 @@ type Snapshot struct {
 	KmPerPx     float64   `json:"km_per_px"`
 	Trend       bool      `json:"trend"` // intensity growth/decay applied
 	Model       string    `json:"model"` // forecast model name
+	// StormsNearby counts convective cells within stormRadiusKm that are
+	// forming or strengthening (0 when the model does not follow storms).
+	StormsNearby int `json:"storms_nearby"`
 	nowcast.Result
 
 	Mosaic *radar.Mosaic `json:"-"`
@@ -339,6 +342,9 @@ func (p *Pipeline) builder(history []rainviewer.Frame, grid func(int64) *radar.M
 	}
 }
 
+// stormRadiusKm is how far away a building storm is worth mentioning.
+const stormRadiusKm = 15
+
 // snapshot runs the model for (lat, lon) over a prepared region.
 func (p *Pipeline) snapshot(lat, lon float64, r *region) *Snapshot {
 	gx, gy := geo.LatLonToPixel(lat, lon, p.cfg.Zoom)
@@ -346,17 +352,18 @@ func (p *Pipeline) snapshot(lat, lon float64, r *region) *Snapshot {
 	opt := p.nowcastOptions(lat)
 	useTrend := p.cfg.Model.Trend && r.prep.HasTrend()
 	return &Snapshot{
-		Trend:       useTrend,
-		Model:       p.cfg.Model.Name,
-		Location:    Location{lat, lon},
-		FrameTime:   time.Unix(r.frame, 0).UTC(),
-		GeneratedAt: time.Now().UTC(),
-		Threshold:   p.cfg.Threshold,
-		Likely:      p.cfg.Likely,
-		Heavy:       p.cfg.Heavy,
-		FramesUsed:  r.prep.Used,
-		KmPerPx:     opt.KmPerPx,
-		Result:      r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend),
-		Mosaic:      r.cur, Field: r.prep.Display, X: x, Y: y,
+		StormsNearby: r.prep.Nearby(x, y, stormRadiusKm/opt.KmPerPx),
+		Trend:        useTrend,
+		Model:        p.cfg.Model.Name,
+		Location:     Location{lat, lon},
+		FrameTime:    time.Unix(r.frame, 0).UTC(),
+		GeneratedAt:  time.Now().UTC(),
+		Threshold:    p.cfg.Threshold,
+		Likely:       p.cfg.Likely,
+		Heavy:        p.cfg.Heavy,
+		FramesUsed:   r.prep.Used,
+		KmPerPx:      opt.KmPerPx,
+		Result:       r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend),
+		Mosaic:       r.cur, Field: r.prep.Display, X: x, Y: y,
 	}
 }

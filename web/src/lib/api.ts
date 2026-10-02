@@ -19,6 +19,8 @@ export type Forecast = {
   motion_reliable: boolean;
   /** Rain expected over the 60 minutes after frame_time, in mm (estimated from radar). */
   accum_mm?: number;
+  /** Storm cells within 15 km that are forming or strengthening. */
+  storms_nearby?: number;
 };
 
 export type Place = { name: string; address: string; lat: number; lon: number };
