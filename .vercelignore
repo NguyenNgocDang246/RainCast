@@ -1,7 +1,7 @@
-web/
-data/
-geoip/
-bin/
+/web/
+/data/
+/geoip/
+/bin/
 *.db
 *.db-*
 .env

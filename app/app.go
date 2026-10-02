@@ -1,6 +1,10 @@
 // Package app wires the forecast API together: the database, the shared
 // cache, the radar pipeline, geocoding and the HTTP server. cmd/raincast
 // runs it as a long-lived server; api/index.go runs it on Vercel.
+//
+// It lives outside internal/ because Vercel's Go runtime wraps
+// api/index.go in a package outside this module's tree, which may not
+// import internal packages; this package may, and does.
 package app
 
 import (
