@@ -23,6 +23,21 @@ func TestRoundTrip(t *testing.T) {
 	}
 }
 
+// The center of pixel (i, j) maps to index (i, j); a point inside it rounds
+// to it.
+func TestLatLonToIndex(t *testing.T) {
+	lat, lon := PixelToLatLon(25856+0.5, 15386+0.5, 7)
+	x, y := LatLonToIndex(lat, lon, 7)
+	if math.Abs(x-25856) > 1e-6 || math.Abs(y-15386) > 1e-6 {
+		t.Fatalf("center -> (%f,%f), want (25856,15386)", x, y)
+	}
+	lat, lon = PixelToLatLon(25856+0.9, 15386+0.9, 7)
+	x, y = LatLonToIndex(lat, lon, 7)
+	if math.Round(x) != 25856 || math.Round(y) != 15386 {
+		t.Fatalf("inside -> (%f,%f), want to round to (25856,15386)", x, y)
+	}
+}
+
 func TestMetersPerPixel(t *testing.T) {
 	m := MetersPerPixel(10.85, 7)
 	if m < 1150 || m > 1250 {

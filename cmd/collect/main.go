@@ -35,7 +35,7 @@ func main() {
 	cacheDir := flag.String("cache", "data/tiles", "tile cache directory, read by cmd/backtest")
 	poll := flag.Duration("poll", 2*time.Minute, "how often to check for new frames")
 	cacheAge := flag.Duration("cache-age", pipeline.DefaultConfig().CacheAge, "how long radar tiles are kept for backtesting")
-	rateLimit := flag.Int("rate-limit", 50, "RainViewer requests per minute for this process; RainViewer allows 100 per IP, shared with raincast")
+	rateLimit := flag.Int("rate-limit", 90, "RainViewer requests per minute for this process; RainViewer allows 100 per IP, so lower this when raincast shares the IP")
 	col := collect.DefaultConfig()
 	flag.IntVar(&col.Regions, "regions", col.Regions, "rainy radar regions worldwide to collect")
 	keepAwake := flag.Bool("keep-awake", true, "stop Windows from sleeping on its own while running, so collection has no gaps")

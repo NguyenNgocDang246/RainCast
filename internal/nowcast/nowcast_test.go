@@ -129,3 +129,53 @@ func TestProbability(t *testing.T) {
 		t.Error("DefaultProbRadius should go from 2 to 10 px over an hour")
 	}
 }
+
+// rotation is solid-body rotation about (cx, cy): ω rad/min, sampled per
+// 8-px block so bilinear interpolation stays close to exact.
+func rotation(n int, cx, cy, omega float64) *motion.Field {
+	bs, bw := 8, n/8
+	v := make([]motion.Vector, bw*bw)
+	valid := make([]bool, bw*bw)
+	for by := range bw {
+		for bx := range bw {
+			x, y := (float64(bx)+0.5)*float64(bs)-cx, (float64(by)+0.5)*float64(bs)-cy
+			v[by*bw+bx] = motion.Vector{DX: -omega * y, DY: omega * x}
+			valid[by*bw+bx] = true
+		}
+	}
+	return motion.FromBlocks(bs, bw, bw, v, valid)
+}
+
+// In a rotating field the upstream point stays on the circle; Euler steps
+// spiral outward, midpoint steps do not.
+func TestMidpointFollowsRotation(t *testing.T) {
+	const n, c, rad = 256, 128.0, 60.0
+	f := rotation(n, c, c, 2*math.Pi/120) // a full turn in two hours
+	g := radar.NewGrid(n, n)
+	// Rain only on the circle a quarter turn (30 min) upstream of the target.
+	disc(g, int(c), int(c-rad), 1, 40)
+	r := Forecast(g, f, c+rad, c, Options{Horizon: 30, Threshold: 20})
+	if r.At(30) < 20 {
+		t.Fatalf("rain a quarter turn upstream did not arrive: %v dBZ at 30'", r.At(30))
+	}
+}
+
+// 40 dBZ (≈ 11.5 mm/h) for half an hour is ≈ 5.8 mm.
+func TestAccumulation(t *testing.T) {
+	g := radar.NewGrid(128, 128)
+	disc(g, 64, 64, 40, 40)
+	r := Forecast(g, uniformField(motion.Vector{}), 64, 64, Options{Horizon: 30, Threshold: 20})
+	if math.Abs(r.AccumMM-radar.RainRate(40)/2) > 1e-9 || math.Abs(r.AccumMM-5.75) > 0.1 {
+		t.Fatalf("accum = %.2f mm, want ≈ 5.75", r.AccumMM)
+	}
+	var sum float64
+	for _, pt := range r.Series[1:] {
+		sum += float64(pt.MM)
+	}
+	if math.Abs(sum-r.AccumMM) > 1e-3 {
+		t.Fatalf("points' mm total %.4f, accum %.4f", sum, r.AccumMM)
+	}
+	if d := Forecast(radar.NewGrid(64, 64), nil, 32, 32, Options{Horizon: 60, Threshold: 20}); d.AccumMM != 0 {
+		t.Fatalf("dry accum = %v", d.AccumMM)
+	}
+}

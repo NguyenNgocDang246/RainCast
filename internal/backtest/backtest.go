@@ -49,15 +49,10 @@ type Region struct {
 // the same semi-Lagrangian nowcast extrapolates along, and the ensembles
 // the backtest builds from their forecasts.
 const (
-	MethodTREC     = model.TREC
-	MethodCOTREC   = model.COTREC
-	MethodHS       = model.HS
-	MethodLK       = model.LK
-	MethodCellNN   = model.CellNN
-	MethodCellHung = model.CellHung
-	MethodHybrid   = model.Hybrid
-	MethodMean     = "ensemble" // mean of the members' dBZ and probability
-	MethodVote     = "vote"     // share of members forecasting rain
+	MethodTREC = model.TREC
+	MethodHS   = model.HS
+	MethodLK   = model.LK
+	MethodMean = "ensemble" // mean of the members' dBZ and probability
 )
 
 // Variant is one forecast setting to score.
@@ -69,9 +64,6 @@ type Variant struct {
 	// Members are the Names of the variants an ensemble combines; they
 	// must come earlier in Config.Variants.
 	Members []string
-	// Weighting is the scheme of a MethodWeighted ensemble. Every scheme
-	// but WeightEqual needs Members to be Config.WeightMembers.
-	Weighting string
 }
 
 // Config controls the run.
@@ -79,8 +71,14 @@ type Config struct {
 	Variants  []Variant
 	Leads     []int // minutes, multiples of StepSec/60
 	Threshold float32
-	Radius    int
-	TrendTau  float64
+	// Classes are the kinds of rain also scored on their own.
+	Classes []Class
+	// FSSThresholds (dBZ) and FSSWindows (odd, in sample points across)
+	// are where the fractions skill score is measured.
+	FSSThresholds []float32
+	FSSWindows    []int
+	Radius        int
+	TrendTau      float64
 	// Points are sampled every Step pixels inside the central tile, which
 	// keeps a full tile of radar around each one.
 	Step    int
@@ -95,10 +93,6 @@ type Config struct {
 	Parallel, Workers int
 	// Reference is the Name of the variant others are compared with.
 	Reference string
-	// WeightMembers are the variants whose statistics weighted ensembles
-	// learn from, and Weights what was learned (from the previous run).
-	WeightMembers []string
-	Weights       *Weights
 }
 
 // LeadScore is a variant's skill at one lead time.
@@ -107,6 +101,9 @@ type LeadScore struct {
 	Scores  verify.Scores `json:"scores"`
 	MAEdBZ  *float64      `json:"mae_dbz"` // over samples where either side had rain
 	Brier   *float64      `json:"brier"`
+	// AccumMAE is the mean |pred − obs| rain accumulated up to this lead,
+	// in mm, both sides from radar through radar.RainRate.
+	AccumMAE *float64 `json:"accum_mae_mm,omitempty"`
 }
 
 // Interval is a 95% bootstrap confidence interval.
@@ -129,7 +126,10 @@ type Result struct {
 	Baseline bool          `json:"baseline"`
 	Leads    []LeadScore   `json:"leads"`
 	Overall  verify.Scores `json:"overall"`
-	CSICI    *Interval     `json:"csi_ci,omitempty"`
+	// CSIMean60 and CSIMean90 are meanCSI up to 60 and 90 minutes.
+	CSIMean60 *float64  `json:"csi_mean_60,omitempty"`
+	CSIMean90 *float64  `json:"csi_mean_90,omitempty"`
+	CSICI     *Interval `json:"csi_ci,omitempty"`
 	// DeltaCSI is the overall CSI minus the reference's, with its interval
 	// from the same resamples: an interval entirely above 0 means better.
 	DeltaCSI   *float64  `json:"delta_csi,omitempty"`
@@ -137,12 +137,20 @@ type Result struct {
 	// Probability scores: Brier (lower is better), its skill against
 	// persistence, the Brier after calibration learned on the other half
 	// of the data, and the area under the ROC curve.
-	Brier       *float64 `json:"brier,omitempty"`
-	BSS         *float64 `json:"bss,omitempty"`
-	BrierCal    *float64 `json:"brier_cal,omitempty"`
-	AUC         *float64 `json:"auc,omitempty"`
+	Brier    *float64 `json:"brier,omitempty"`
+	BSS      *float64 `json:"bss,omitempty"`
+	BrierCal *float64 `json:"brier_cal,omitempty"`
+	AUC      *float64 `json:"auc,omitempty"`
+	// AccumMAE is LeadScore.AccumMAE at the last lead: the error in the
+	// hour's rain total.
+	AccumMAE    *float64 `json:"accum_mae_mm,omitempty"`
 	Reliability []RelBin `json:"reliability,omitempty"`
-	MsPerIssue  float64  `json:"ms_per_issue"`
+	// Classes are the scores on each kind of rain (Config.Classes).
+	Classes []ClassScore `json:"classes,omitempty"`
+	// FSS are the fractions skill scores, threshold by threshold and window
+	// by window (Config.FSSThresholds × Config.FSSWindows).
+	FSS        []FSSScore `json:"fss,omitempty"`
+	MsPerIssue float64    `json:"ms_per_issue"`
 }
 
 // RegionSummary describes one region's data and each result's overall CSI,
@@ -194,11 +202,6 @@ type Report struct {
 	Groups    []Group         `json:"groups"`
 	Results   []Result        `json:"results"` // persistence first, then variants
 	ErrCorr   *ErrCorr        `json:"err_corr,omitempty"`
-	// WeightMembers and Weights show what the weighted ensembles used:
-	// Weights[fold][scheme][lead][member], each fold learned on the other.
-	WeightMembers  []string                  `json:"weight_members,omitempty"`
-	Weights        [2]map[string][][]float64 `json:"weights,omitempty"`
-	WeightsLearned bool                      `json:"weights_learned"`
 }
 
 // MinEvents is the number of rain events below which the backtest cannot

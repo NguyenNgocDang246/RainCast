@@ -130,7 +130,10 @@ func (s *Server) forecastError(w http.ResponseWriter, err error, lat, lon float6
 
 // serveSnapshot answers with snap.
 func (s *Server) serveSnapshot(w http.ResponseWriter, r *http.Request, snap *pipeline.Snapshot) {
-	writeJSON(w, http.StatusOK, snap)
+	// A copy: the snapshot may be cached and served concurrently.
+	out := *snap
+	out.NextDue = s.src.NextDue(snap.FrameTime)
+	writeJSON(w, http.StatusOK, &out)
 }
 
 // latLon reads the required lat and lon parameters, writing the error

@@ -37,9 +37,9 @@ const (
 	// stations included) so interactive requests always have headroom.
 	CollectRateLimit = 55
 
-	// coverageDir holds radar coverage tiles. They are not frame data, so
+	// CoverageDir holds radar coverage tiles. They are not frame data, so
 	// PruneCache leaves them alone.
-	coverageDir = "coverage"
+	CoverageDir = "coverage"
 )
 
 // Frame is one radar image set.
@@ -222,6 +222,17 @@ func (c *Client) CachedTile(path string, t Tile) ([]byte, bool) {
 	return data, err == nil
 }
 
+// HasCachedTile reports whether a tile is in the disk cache, without
+// reading it.
+func (c *Client) HasCachedTile(path string, t Tile) bool {
+	p := c.cachePath(path, t)
+	if p == "" {
+		return false
+	}
+	_, err := os.Stat(p)
+	return err == nil
+}
+
 // CachedCoverage reads a coverage tile from the disk cache only.
 func (c *Client) CachedCoverage(t Tile) ([]byte, bool) {
 	p := c.CoveragePath(t)
@@ -288,7 +299,7 @@ func (c *Client) CoveragePath(t Tile) string {
 	if c.CacheDir == "" {
 		return ""
 	}
-	return filepath.Join(c.CacheDir, coverageDir, fmt.Sprintf("%d_%d_%d.png", t.Z, t.X, t.Y))
+	return filepath.Join(c.CacheDir, CoverageDir, fmt.Sprintf("%d_%d_%d.png", t.Z, t.X, t.Y))
 }
 
 // PruneCache removes cached frames older than maxAge.
@@ -306,7 +317,7 @@ func (c *Client) PruneCache(maxAge time.Duration) error {
 	cutoff := time.Now().Add(-maxAge)
 	for _, e := range entries {
 		info, err := e.Info()
-		if err != nil || !e.IsDir() || e.Name() == coverageDir || info.ModTime().After(cutoff) {
+		if err != nil || !e.IsDir() || e.Name() == CoverageDir || info.ModTime().After(cutoff) {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(c.CacheDir, e.Name())); err != nil {
@@ -320,9 +331,20 @@ func (c *Client) cachePath(path string, t Tile) string {
 	if c.CacheDir == "" {
 		return ""
 	}
-	dir := strings.Trim(strings.ReplaceAll(path, "/", "_"), "_")
-	return filepath.Join(c.CacheDir, dir, fmt.Sprintf("%d_%d_%d.png", t.Z, t.X, t.Y))
+	return filepath.Join(c.FrameDir(path), TileFile(t))
 }
+
+// FrameDir is the cache directory holding the tiles of the frame at path
+// (empty without a cache).
+func (c *Client) FrameDir(path string) string {
+	if c.CacheDir == "" {
+		return ""
+	}
+	return filepath.Join(c.CacheDir, strings.Trim(strings.ReplaceAll(path, "/", "_"), "_"))
+}
+
+// TileFile is the file name of tile t inside a FrameDir.
+func TileFile(t Tile) string { return fmt.Sprintf("%d_%d_%d.png", t.Z, t.X, t.Y) }
 
 func writeAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {

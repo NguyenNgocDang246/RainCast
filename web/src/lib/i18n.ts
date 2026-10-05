@@ -35,8 +35,20 @@ function read(): Locale {
   return navigator.language.toLowerCase().startsWith("vi") ? "vi" : "en";
 }
 
-/** A backend error message in the chosen language, when it is a known one. */
+/** A backend error message in the chosen language, when it is a known one; as is otherwise (admin pages). */
 export const errorText = (t: Dict, msg: string) => t.errors[msg] ?? msg;
+
+/**
+ * An error as visitors see it: a known one translated, and anything else (a
+ * crash, a proxy's error page, a rate limit) as a plain line without codes.
+ */
+export function userError(t: Dict, msg: string): string {
+  const known = t.errors[msg];
+  if (known) return known;
+  // Rate limits and an overloaded or starting server pass with a retry.
+  if (/\b(429|503)\b/.test(msg)) return t.problem.busy;
+  return t.problem.generic;
+}
 
 export function setLocale(l: Locale) {
   try {

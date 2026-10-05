@@ -6,9 +6,9 @@ export function compass(deg: number, locale: Locale): string {
   return messages[locale].compass[Math.round((((deg % 360) + 360) % 360) / 45) % 8];
 }
 
-/** First minute after the frame at which the echo drops below dbz, or -1. */
-export function dropsBelow(f: Forecast, dbz: number): number {
-  const p = f.series.find((s) => s.minute > 0 && s.dbz < dbz);
+/** First minute after minute `from` at which the echo drops below dbz, or -1. */
+export function dropsBelow(f: Forecast, dbz: number, from = 0): number {
+  const p = f.series.find((s) => s.minute > from && s.dbz < dbz);
   return p ? p.minute : -1;
 }
 

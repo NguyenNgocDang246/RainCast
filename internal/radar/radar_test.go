@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"math"
 	"os"
 	"testing"
 
@@ -121,9 +122,32 @@ func TestNoRainNextToBand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gx, gy := geo.LatLonToPixel(10.890980609372656, 106.7926682027152, 7)
+	gx, gy := geo.LatLonToIndex(10.890980609372656, 106.7926682027152, 7)
 	x, y := gx-101*256, gy-60*256
 	if v := g.MedianInRadius(x, y, 2); v >= 20 {
 		t.Fatalf("median = %v dBZ, want < 20 (no rain)", v)
+	}
+}
+
+func TestRainRate(t *testing.T) {
+	cases := []struct {
+		dbz  float32
+		want float64
+	}{{10, 0}, {20, 0.65}, {40, 11.5}, {55, 100}, {65, 100}}
+	for _, c := range cases {
+		if got := RainRate(c.dbz); math.Abs(got-c.want) > 0.02*c.want+1e-9 {
+			t.Errorf("RainRate(%v) = %.3f mm/h, want ≈ %.3f", c.dbz, got, c.want)
+		}
+	}
+}
+
+func TestDBZInvertsRainRate(t *testing.T) {
+	for _, mmh := range []float64{1, 4, 8, 15} {
+		if got := RainRate(DBZ(mmh)); math.Abs(got-mmh) > 1e-3*mmh {
+			t.Errorf("RainRate(DBZ(%v)) = %.4f", mmh, got)
+		}
+	}
+	if d := DBZ(1); math.Abs(float64(d)-23.01) > 0.01 {
+		t.Errorf("DBZ(1) = %.2f, want 23.01", d)
 	}
 }

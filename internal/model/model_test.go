@@ -133,6 +133,24 @@ func TestDefaultForecastsArrival(t *testing.T) {
 	if r.DirectionDeg < 60 || r.DirectionDeg > 120 {
 		t.Fatalf("heading %.0f°, want east", r.DirectionDeg)
 	}
+	if len(r.MotionMembers) != 3 || r.MotionCoherence < 0.9 {
+		t.Fatalf("members %+v coherence %.2f, want 3 agreeing", r.MotionMembers, r.MotionCoherence)
+	}
+	// Over a cell that really moved, moving it explains the last change.
+	if c := p.Forecast(b.Grid(last), 126, 170, opt, false); c.MotionGain == nil || *c.MotionGain < 0.5 {
+		t.Fatalf("gain over the moving cell = %v, want > 0.5", c.MotionGain)
+	}
+}
+
+func TestSingleMemberMotion(t *testing.T) {
+	b, last := builder([]int{0, 4, 8, 12, 16})
+	p := Single(TREC, 4, false).Prepare(b, last, 15)
+	opt := nowcast.Options{Horizon: 30, Threshold: 20, Radius: 1, KmPerPx: 1.2}
+	r := p.Forecast(b.Grid(last), 126, 170, opt, false)
+	if math.Abs(r.MotionCoherence-1) > 1e-9 || len(r.MotionMembers) != 1 ||
+		r.MotionMembers[0].Method != TREC || math.Abs(r.MotionMembers[0].SpeedKmh-r.SpeedKmh) > 1e-9 {
+		t.Fatalf("coherence %v members %+v speed %v", r.MotionCoherence, r.MotionMembers, r.SpeedKmh)
+	}
 }
 
 func TestParse(t *testing.T) {
@@ -153,8 +171,11 @@ func TestParse(t *testing.T) {
 
 // A Prepared that went through MarshalBinary forecasts exactly the same.
 func TestPreparedRoundTrip(t *testing.T) {
-	b, last := builder([]int{0, 4, 8, 12, 16})
+	b, last := builder([]int{0, 2, 5, 9, 14})
 	p := Default().Prepare(b, last, 15)
+	if len(p.Storms) != 3 {
+		t.Fatalf("followed %d storms, want the 3 cells", len(p.Storms))
+	}
 	data, err := p.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -163,7 +184,7 @@ func TestPreparedRoundTrip(t *testing.T) {
 	if err := q.UnmarshalBinary(data); err != nil {
 		t.Fatal(err)
 	}
-	if q.Used != p.Used || q.HasTrend() != p.HasTrend() || q.Display.Global != p.Display.Global {
+	if q.Used != p.Used || q.HasTrend() != p.HasTrend() || q.Display.Global != p.Display.Global || len(q.Storms) != len(p.Storms) {
 		t.Fatalf("decoded %+v, want %+v", q, p)
 	}
 	opt := nowcast.Options{Horizon: 60, Threshold: 20, Radius: 1, KmPerPx: 1.2}
@@ -207,5 +228,34 @@ func TestCacheKeysPairsByContent(t *testing.T) {
 	b2.PairID = func(int64) string { return "a" }
 	if f, _ := b2.Field(TREC, last, 1); f != fa {
 		t.Fatal("shared field not used")
+	}
+}
+
+// A cell that formed since the last frame counts as building nearby; one
+// steady for the whole history does not.
+func TestNearbyStorms(t *testing.T) {
+	grids := map[int64]*radar.Grid{}
+	for i := range 3 {
+		g := cellsAt(0)
+		if i == 2 {
+			for y := 210; y < 226; y++ {
+				for x := 210; x < 226; x++ {
+					g.Set(x, y, 45)
+				}
+			}
+		}
+		grids[int64(600*(i+1))] = g
+	}
+	b := &Builder{
+		Grid:  func(t int64) *radar.Grid { return grids[t] },
+		Prev:  func(t int64) (int64, bool) { return t - 600, grids[t-600] != nil },
+		Cache: NewCache(),
+	}
+	p := Default().Prepare(b, 1800, 15)
+	if n := p.Nearby(218, 218, 12); n != 1 {
+		t.Errorf("building storms near the new cell = %d, want 1", n)
+	}
+	if n := p.Nearby(110, 170, 12); n != 0 {
+		t.Errorf("building storms near a steady cell = %d, want 0", n)
 	}
 }
