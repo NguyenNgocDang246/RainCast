@@ -17,9 +17,6 @@ type Member struct {
 	Method string
 	Pairs  int     // frame pairs its motion averages
 	Weight float64 // relative; weights are normalized over usable members
-	// Accel lets the member's motion keep changing as it did over its
-	// frame pairs (damped), instead of staying as it is now.
-	Accel bool
 }
 
 // Model forecasts by extrapolating the radar along each member's motion and
@@ -30,9 +27,9 @@ type Model struct {
 	// Trend lets echoes grow or weaken as they travel, each member along
 	// its own motion.
 	Trend bool
-	// Storm, with Trend, follows convective cells through the frames along
-	// each member's motion and sets the trend over each cell from its
-	// life: growing or decaying, newly formed, merged or split.
+	// Storm follows convective cells through the frames along the first
+	// usable member's motion, to report those building near a point
+	// (Prepared.Nearby). It does not change the forecast.
 	Storm bool
 }
 
@@ -43,10 +40,13 @@ type Model struct {
 // Lucas–Kanade by 0.8 CSI points and TREC by 1.5, in every climate group,
 // and learned weights did no better than equal ones; adding the trend
 // lifted the broader seven-method mean (since trimmed to these three) by
-// another 0.8. Re-run
+// another 0.8. On 10,727 forecast times from 135 regions (October 2026)
+// it still led every single method; setting the trend over cells from
+// their lives, a learned trend and probability matching did not help, so
+// cells are followed only to warn of storms building. Re-run
 // cmd/backtest -fresh as data accumulates to check it still leads.
 func Default() Model {
-	return Model{Name: "ensemble", Trend: true, Members: []Member{
+	return Model{Name: "ensemble", Trend: true, Storm: true, Members: []Member{
 		{Method: LK, Pairs: 4, Weight: 1},
 		{Method: HS, Pairs: 4, Weight: 1},
 		{Method: TREC, Pairs: 4, Weight: 1},
@@ -82,7 +82,7 @@ func Parse(name string, pairs int, trend bool) (Model, error) {
 type Prepared struct {
 	fields  []*motion.Field
 	trends  []*motion.Trend
-	accels  []*motion.Field // nil for members without acceleration
+	methods []string
 	weights []float64
 	// Storms are the cells the first usable member followed, for reporting
 	// those near a point; nil unless the model uses Storm.
@@ -91,7 +91,15 @@ type Prepared struct {
 	Used int
 	// Display is the members' mean motion, for drawing.
 	Display *motion.Field
+	// prev is the frame before this one and minutes the gap to it, for
+	// checking the motion against the last change; nil without one.
+	prev    *radar.Grid
+	minutes float64
 }
+
+// gainRadius is the window, in pixels (~30 km), over which a forecast's
+// motion is checked against the last radar change.
+const gainRadius = 24
 
 // Prepare estimates every member's motion at frame t, concurrently, and
 // its intensity trend (rainDBZ outlines echoes for the trend). It returns
@@ -100,8 +108,6 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 	n := len(m.Members)
 	fields := make([]*motion.Field, n)
 	trends := make([]*motion.Trend, n)
-	accels := make([]*motion.Field, n)
-	storms := make([][]cell.Storm, n)
 	used := make([]int, n)
 	var wg sync.WaitGroup
 	for i, mem := range m.Members {
@@ -110,13 +116,6 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 			defer wg.Done()
 			fields[i], used[i] = b.Field(mem.Method, t, mem.Pairs)
 			trends[i] = b.Trend(t, fields[i], rainDBZ)
-			if m.Storm && trends[i] != nil {
-				storms[i] = b.Storms(t, fields[i], mem.Pairs)
-				trends[i] = cell.AdjustTrend(trends[i], storms[i], b.Grid(t).W)
-			}
-			if mem.Accel {
-				accels[i] = b.Accel(mem.Method, t, mem.Pairs)
-			}
 		}()
 	}
 	wg.Wait()
@@ -126,12 +125,12 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 		if f == nil {
 			continue
 		}
+		if m.Storm && p.fields == nil {
+			p.Storms = stormInfo(b.Storms(t, f, m.Members[i].Pairs))
+		}
 		p.fields = append(p.fields, f)
 		p.trends = append(p.trends, trends[i])
-		p.accels = append(p.accels, accels[i])
-		if m.Storm && p.Storms == nil {
-			p.Storms = stormInfo(storms[i])
-		}
+		p.methods = append(p.methods, m.Members[i].Method)
 		p.weights = append(p.weights, m.Members[i].Weight)
 		sum += m.Members[i].Weight
 		p.Used = max(p.Used, used[i])
@@ -143,6 +142,11 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 		p.weights[i] /= sum
 	}
 	p.Display = mean(p.fields, p.weights)
+	if pt, ok := b.Prev(t); ok {
+		if p.prev = b.Grid(pt); p.prev != nil {
+			p.minutes = float64(t-pt) / 60
+		}
+	}
 	return p
 }
 
@@ -158,11 +162,11 @@ func (p *Prepared) HasTrend() bool {
 
 // Forecast is the weighted mean of the members' nowcasts at (x, y): echo,
 // rain probability, arrival times and motion. With trend, each member also
-// grows or weakens echoes along its own motion (opt.Trend is ignored), and
-// members with Accel speed up or slow down (opt.Accel is ignored).
+// grows or weakens echoes along its own motion (opt.Trend is ignored).
 func (p *Prepared) Forecast(g *radar.Grid, x, y float64, opt nowcast.Options, trend bool) nowcast.Result {
 	var series []nowcast.Point
-	var vx, vy float64
+	var vx, vy, speed float64
+	members := make([]nowcast.MemberMotion, 0, len(p.fields))
 	reliable := false
 	for i, f := range p.fields {
 		o := opt
@@ -170,7 +174,6 @@ func (p *Prepared) Forecast(g *radar.Grid, x, y float64, opt nowcast.Options, tr
 		if trend {
 			o.Trend = p.trends[i]
 		}
-		o.Accel = p.accels[i]
 		r := nowcast.Forecast(g, f, x, y, o)
 		w := p.weights[i]
 		if series == nil {
@@ -186,13 +189,24 @@ func (p *Prepared) Forecast(g *radar.Grid, x, y float64, opt nowcast.Options, tr
 		v := f.At(x, y)
 		vx += w * v.DX
 		vy += w * v.DY
+		speed += w * math.Hypot(v.DX, v.DY)
 		reliable = reliable || r.MotionReliable
+		kmh, deg := nowcast.Heading(v, opt.KmPerPx)
+		members = append(members, nowcast.MemberMotion{Method: p.methods[i], SpeedKmh: kmh, DirectionDeg: deg})
 	}
 	res := nowcast.Summarize(series, opt)
 	res.MotionReliable = reliable
-	res.SpeedKmh = math.Hypot(vx, vy) * opt.KmPerPx * 60
-	// Pixel Y grows southward, so north is -DY.
-	res.DirectionDeg = math.Mod(math.Atan2(vx, -vy)*180/math.Pi+360, 360)
+	v := motion.Vector{DX: vx, DY: vy}
+	res.SpeedKmh, res.DirectionDeg = nowcast.Heading(v, opt.KmPerPx)
+	res.MotionMembers = members
+	if speed > 0 {
+		res.MotionCoherence = math.Hypot(vx, vy) / speed
+	}
+	if p.prev != nil {
+		if gain, ok := motion.TranslationGain(p.prev, g, v, p.minutes, x, y, gainRadius); ok {
+			res.MotionGain = &gain
+		}
+	}
 	return res
 }
 

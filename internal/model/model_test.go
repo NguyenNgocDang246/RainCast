@@ -97,24 +97,6 @@ func TestEveryMethodBuildsAField(t *testing.T) {
 	}
 }
 
-// Cells gaining 1 px per 10 min each frame: the newer two pairs average
-// 0.45 px/min, the older two 0.25, 20 minutes apart.
-func TestAccelOfSpeedingCells(t *testing.T) {
-	b, last := builder([]int{0, 2, 5, 9, 14})
-	for _, m := range Methods {
-		a := b.Accel(m, last, 4)
-		if a == nil {
-			t.Fatalf("%s: no acceleration", m)
-		}
-		if v := a.At(110, 170); math.Abs(v.DX-0.01) > 0.004 {
-			t.Errorf("%s: accel at a cell %.4f px/min², want ≈ 0.01", m, v.DX)
-		}
-	}
-	if a := b.Accel(TREC, last, 1); a != nil {
-		t.Error("one pair cannot show acceleration")
-	}
-}
-
 // An ensemble of one method is that method.
 func TestEnsembleOfOneIsTheMethod(t *testing.T) {
 	b, last := builder([]int{0, 4, 8, 12, 16})
@@ -151,6 +133,24 @@ func TestDefaultForecastsArrival(t *testing.T) {
 	if r.DirectionDeg < 60 || r.DirectionDeg > 120 {
 		t.Fatalf("heading %.0f°, want east", r.DirectionDeg)
 	}
+	if len(r.MotionMembers) != 3 || r.MotionCoherence < 0.9 {
+		t.Fatalf("members %+v coherence %.2f, want 3 agreeing", r.MotionMembers, r.MotionCoherence)
+	}
+	// Over a cell that really moved, moving it explains the last change.
+	if c := p.Forecast(b.Grid(last), 126, 170, opt, false); c.MotionGain == nil || *c.MotionGain < 0.5 {
+		t.Fatalf("gain over the moving cell = %v, want > 0.5", c.MotionGain)
+	}
+}
+
+func TestSingleMemberMotion(t *testing.T) {
+	b, last := builder([]int{0, 4, 8, 12, 16})
+	p := Single(TREC, 4, false).Prepare(b, last, 15)
+	opt := nowcast.Options{Horizon: 30, Threshold: 20, Radius: 1, KmPerPx: 1.2}
+	r := p.Forecast(b.Grid(last), 126, 170, opt, false)
+	if math.Abs(r.MotionCoherence-1) > 1e-9 || len(r.MotionMembers) != 1 ||
+		r.MotionMembers[0].Method != TREC || math.Abs(r.MotionMembers[0].SpeedKmh-r.SpeedKmh) > 1e-9 {
+		t.Fatalf("coherence %v members %+v speed %v", r.MotionCoherence, r.MotionMembers, r.SpeedKmh)
+	}
 }
 
 func TestParse(t *testing.T) {
@@ -172,10 +172,7 @@ func TestParse(t *testing.T) {
 // A Prepared that went through MarshalBinary forecasts exactly the same.
 func TestPreparedRoundTrip(t *testing.T) {
 	b, last := builder([]int{0, 2, 5, 9, 14})
-	m := Default()
-	m.Members[0].Accel = true
-	m.Storm = true
-	p := m.Prepare(b, last, 15)
+	p := Default().Prepare(b, last, 15)
 	if len(p.Storms) != 3 {
 		t.Fatalf("followed %d storms, want the 3 cells", len(p.Storms))
 	}
@@ -254,9 +251,7 @@ func TestNearbyStorms(t *testing.T) {
 		Prev:  func(t int64) (int64, bool) { return t - 600, grids[t-600] != nil },
 		Cache: NewCache(),
 	}
-	m := Default()
-	m.Storm = true
-	p := m.Prepare(b, 1800, 15)
+	p := Default().Prepare(b, 1800, 15)
 	if n := p.Nearby(218, 218, 12); n != 1 {
 		t.Errorf("building storms near the new cell = %d, want 1", n)
 	}

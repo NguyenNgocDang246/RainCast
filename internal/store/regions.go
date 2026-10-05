@@ -77,6 +77,22 @@ func (s *Store) RecordFrame(ctx context.Context, t int64, path string) error {
 	return err
 }
 
+// DeleteFrames removes the frames recorded at times.
+func (s *Store) DeleteFrames(ctx context.Context, times []int64) error {
+	for _, t := range times {
+		if _, err := s.db.ExecContext(ctx, `DELETE FROM frames WHERE time = $1`, t); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// DeleteRegion removes the region at (tileX, tileY).
+func (s *Store) DeleteRegion(ctx context.Context, tileX, tileY int) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM regions WHERE tile_x = $1 AND tile_y = $2`, tileX, tileY)
+	return err
+}
+
 // RecentFrames returns the latest recorded frames, newest first.
 func (s *Store) RecentFrames(ctx context.Context, limit int) ([]FrameRef, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT time, path FROM frames ORDER BY time DESC LIMIT $1`, limit)

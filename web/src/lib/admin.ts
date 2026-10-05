@@ -53,8 +53,6 @@ export type BacktestResult = {
   method?: string;
   pairs?: number;
   trend?: boolean;
-  accel?: boolean;
-  storm?: boolean;
   baseline?: boolean;
   leads: { lead_min: number; scores: Scores; mae_dbz: number | null; brier?: number | null }[];
   overall: Scores;
@@ -68,7 +66,38 @@ export type BacktestResult = {
   auc?: number;
   /** Mean error of the hour's rain total against radar, mm. */
   accum_mae_mm?: number;
+  /** Scores on each kind of rain, by echo strength (missing in older reports). */
+  classes?: BacktestClass[];
+  /** Fractions skill scores, threshold by threshold and window by window (missing in older reports). */
+  fss?: BacktestFSS[];
   ms_per_issue?: number;
+};
+
+export type BacktestFSS = {
+  /** dBZ. */
+  threshold: number;
+  /** Sample points across; 1 is the point itself. */
+  window: number;
+  /** About. */
+  window_km: number;
+  /** Per lead, as in the result's leads. */
+  leads: (number | null)[];
+  overall: number | null;
+  /** Against report.reference. */
+  delta_fss?: number;
+};
+
+export type BacktestClass = {
+  /** Vietnamese label; build one from lo/hi instead. */
+  class: string;
+  lo: number;
+  /** Missing: no upper bound. */
+  hi?: number;
+  observed: number;
+  overall: Scores;
+  csi_ci?: [number, number];
+  delta_csi?: number;
+  delta_csi_ci?: [number, number];
 };
 
 export type BacktestGroup = { climate: string; regions: number; issues: number; events: number; results: BacktestResult[] };

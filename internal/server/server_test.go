@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"testing"
+	"time"
 
 	"raincast/internal/geocode"
 	"raincast/internal/pipeline"
@@ -25,6 +26,8 @@ type fakeSource struct {
 func (f *fakeSource) Ready() bool { return !f.notLoaded }
 
 func (f *fakeSource) Status() pipeline.Status { return pipeline.Status{Ticks: 3} }
+
+func (f *fakeSource) NextDue(t time.Time) time.Time { return t.Add(pipeline.FrameInterval) }
 
 func (f *fakeSource) Radar() (pipeline.RadarFrame, bool) {
 	if f.notLoaded {
@@ -233,5 +236,22 @@ func TestRadarEndpoint(t *testing.T) {
 	var f pipeline.RadarFrame
 	if err := json.NewDecoder(rec.Body).Decode(&f); err != nil || rec.Code != http.StatusOK || f.MaxZoom != 7 || f.TileURL == "" {
 		t.Errorf("%d %+v %v", rec.Code, f, err)
+	}
+}
+
+func TestRadarMaxAge(t *testing.T) {
+	due := time.Date(2026, 10, 5, 8, 10, 0, 0, time.UTC)
+	for _, c := range []struct {
+		before time.Duration
+		want   int
+	}{
+		{8 * time.Minute, 60},
+		{30 * time.Second, 30},
+		{0, 15},
+		{-4 * time.Minute, 15},
+	} {
+		if got := radarMaxAge(due, due.Add(-c.before)); got != c.want {
+			t.Errorf("%v before due: %d, want %d", c.before, got, c.want)
+		}
 	}
 }

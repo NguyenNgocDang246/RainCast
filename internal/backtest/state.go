@@ -50,7 +50,9 @@ type block struct {
 	Start   int64
 	Issues  int
 	Acc     [][]leadAcc
-	Nanos   []int64 // time spent per variant
+	Cls     [][][]classAcc // [variant][class][lead]
+	FSS     [][][][]fssAcc // [variant][threshold][window][lead]; nil until scored
+	Nanos   []int64        // time spent per variant
 }
 
 // hist counts outcomes per forecast-probability bin.
@@ -96,15 +98,12 @@ type State struct {
 	Hist    [2][][]hist
 	Corr    corrAcc
 	Regions map[string]*regionState
-	// WStats feed the weighted ensembles of the next run.
-	WStats *WeightStats
 }
 
 // NewState returns an empty state for cfg.
 func NewState(cfg Config) *State {
 	n := len(cfg.Variants) + 1
-	st := &State{Version: cfg.version(), Blocks: map[string]*block{}, Regions: map[string]*regionState{},
-		WStats: newWeightStats(cfg.WeightMembers, cfg.Leads)}
+	st := &State{Version: cfg.version(), Blocks: map[string]*block{}, Regions: map[string]*regionState{}}
 	for h := range st.Hist {
 		st.Hist[h] = make([][]hist, n)
 		for v := range n {
@@ -122,9 +121,10 @@ func NewState(cfg Config) *State {
 // discarded.
 func (cfg Config) version() string {
 	h := fnv.New64a()
-	fmt.Fprint(h, "v2", cfg.Leads, cfg.Threshold, cfg.Radius, cfg.TrendTau, cfg.Step, cfg.StepSec)
+	fmt.Fprint(h, "v3", cfg.Leads, cfg.Threshold, cfg.Radius, cfg.TrendTau, cfg.Step, cfg.StepSec, cfg.Classes,
+		cfg.FSSThresholds, cfg.FSSWindows)
 	for _, v := range cfg.Variants {
-		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Accel, v.Storm, v.Members, v.Weighting)
+		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Members)
 	}
 	return fmt.Sprintf("%x", h.Sum64())
 }
@@ -149,14 +149,18 @@ func blockKey(region string, t int64) string { return fmt.Sprintf("%s|%d", regio
 func half(t int64) int { return int(t/blockSec) % 2 }
 
 // block returns the block holding issue time t, creating it.
-func (st *State) block(region, climate string, t int64, nVar, nLead int) *block {
+func (st *State) block(region, climate string, t int64, nVar, nCls, nLead int) *block {
 	k := blockKey(region, t)
 	b := st.Blocks[k]
 	if b == nil {
 		b = &block{Region: region, Climate: climate, Start: t / blockSec * blockSec,
-			Acc: make([][]leadAcc, nVar), Nanos: make([]int64, nVar)}
+			Acc: make([][]leadAcc, nVar), Cls: make([][][]classAcc, nVar), Nanos: make([]int64, nVar)}
 		for v := range b.Acc {
 			b.Acc[v] = make([]leadAcc, nLead)
+			b.Cls[v] = make([][]classAcc, nCls)
+			for k := range b.Cls[v] {
+				b.Cls[v][k] = make([]classAcc, nLead)
+			}
 		}
 		st.Blocks[k] = b
 	}
@@ -176,7 +180,27 @@ func (st *State) merge(part *State) {
 			for l := range b.Acc[v] {
 				b.Acc[v][l].add(pb.Acc[v][l])
 			}
+			for k := range b.Cls[v] {
+				for l := range b.Cls[v][k] {
+					b.Cls[v][k][l].add(pb.Cls[v][k][l])
+				}
+			}
 			b.Nanos[v] += pb.Nanos[v]
+		}
+		switch {
+		case pb.FSS == nil:
+		case b.FSS == nil:
+			b.FSS = pb.FSS
+		default:
+			for v := range b.FSS {
+				for t := range b.FSS[v] {
+					for w := range b.FSS[v][t] {
+						for l := range b.FSS[v][t][w] {
+							b.FSS[v][t][w][l].add(pb.FSS[v][t][w][l])
+						}
+					}
+				}
+			}
 		}
 	}
 	for h := range st.Hist {
@@ -193,13 +217,6 @@ func (st *State) merge(part *State) {
 		c.S2[v] += pc.S2[v]
 		for w := range c.Prod[v] {
 			c.Prod[v][w] += pc.Prod[v][w]
-		}
-	}
-	if part.WStats != nil {
-		if st.WStats == nil {
-			st.WStats = part.WStats
-		} else {
-			st.WStats.merge(part.WStats)
 		}
 	}
 	for name, pr := range part.Regions {

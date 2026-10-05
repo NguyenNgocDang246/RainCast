@@ -1,7 +1,6 @@
 package backtest
 
 import (
-	"raincast/internal/cell"
 	"raincast/internal/model"
 	"raincast/internal/motion"
 	"raincast/internal/radar"
@@ -19,12 +18,7 @@ type window struct {
 	motion  *model.Builder
 	cache   *model.Cache
 	fields  map[fieldKey]*motion.Field // combined fields for the current issue
-	trends  map[trendKey]*motion.Trend // trends for the current issue
-}
-
-type trendKey struct {
-	fieldKey
-	storm bool
+	trends  map[fieldKey]*motion.Trend // trends for the current issue
 }
 
 type fieldKey struct {
@@ -34,7 +28,7 @@ type fieldKey struct {
 
 func newWindow(src Source, cov *radar.Coverage, cfg Config) *window {
 	w := &window{src: src, cov: cov, cfg: cfg, grids: map[int64]*radar.Mosaic{}, rainy: map[int64]bool{},
-		cache: model.NewCache(), fields: map[fieldKey]*motion.Field{}, trends: map[trendKey]*motion.Trend{}}
+		cache: model.NewCache(), fields: map[fieldKey]*motion.Field{}, trends: map[fieldKey]*motion.Trend{}}
 	w.motion = &model.Builder{
 		Grid: func(t int64) *radar.Grid {
 			if m := w.grid(t); m != nil {
@@ -109,29 +103,14 @@ func (w *window) field(method string, t int64, pairs int) *motion.Field {
 	return f
 }
 
-// accel is how method's motion for issue time t changed over pairs.
-func (w *window) accel(method string, t int64, pairs int) *motion.Field {
-	return w.motion.Accel(method, t, pairs)
-}
-
 // trend is the intensity growth along method's motion over the last 20
-// minutes (10 when the earlier frame is missing), with storm set from the
-// lives of the cells it follows.
-func (w *window) trend(t int64, method string, pairs int, storm bool) *motion.Trend {
-	k := trendKey{fieldKey{method, pairs}, storm}
+// minutes (10 when the earlier frame is missing).
+func (w *window) trend(t int64, method string, pairs int) *motion.Trend {
+	k := fieldKey{method, pairs}
 	if tr, ok := w.trends[k]; ok {
 		return tr
 	}
-	field := w.field(method, t, pairs)
-	var tr *motion.Trend
-	if storm {
-		tr = w.trend(t, method, pairs, false)
-		if tr != nil {
-			tr = cell.AdjustTrend(tr, w.motion.Storms(t, field, pairs), w.grid(t).W)
-		}
-	} else {
-		tr = w.motion.Trend(t, field, w.cfg.Threshold-5)
-	}
+	tr := w.motion.Trend(t, w.field(method, t, pairs), w.cfg.Threshold-5)
 	w.trends[k] = tr
 	return tr
 }

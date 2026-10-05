@@ -21,7 +21,14 @@ export const en: Dict = {
     "link has no location": "This link has no location. Open the place in Google Maps and share it again.",
     "address lookup failed": "Couldn't look up the address. Try again in a few seconds.",
     "radar data is still loading; try again shortly": "Radar data is loading. Try again in a few seconds.",
-    "could not load radar data for this location": "Couldn't load radar for this location.",
+    "could not load radar data for this location": "Couldn't load radar for this location. Try again in a few minutes.",
+    "q is too long (max 500 characters)": "That search is too long. Try a shorter one.",
+    "network error": "Couldn't reach the server. Check your connection and try again.",
+  },
+
+  problem: {
+    busy: "The server is busy. Try again in a few seconds.",
+    generic: "Something went wrong. Try again in a few minutes.",
   },
 
   dashboard: {
@@ -36,6 +43,8 @@ export const en: Dict = {
 
   map: {
     label: "Map for picking a place",
+    legend: "Rain",
+    levels: { veryHeavy: "Very heavy", heavy: "Heavy", moderate: "Moderate", light: "Light" },
   },
 
   locate: {
@@ -59,36 +68,37 @@ export const en: Dict = {
 
   forecast: {
     radarAt: (clock) => `Radar at ${clock}`,
-    accum: (mm) => `About ${mm} mm of rain expected over the next hour`,
+    accum: (mm) => `About ${mm} mm/h of rain expected`,
     storms: (n) =>
       `${n === 1 ? "A storm cell is" : `${n} storm cells are`} forming or strengthening within 15 km — new storms can pop up before radar shows where they go.`,
     moving: (dir, kmh) => ` · rain moving ${dir}, ${kmh} km/h`,
+    stationary: " · rain nearly stationary",
     about: (clock) => `Around ${clock}`,
 
     heavyNow: "Heavy rain now",
-    heavyContinues: "Heavy rain continues",
-    easingNow: "Easing off now",
-    easingIn: "Easing in",
-    noEasing: "No sign of letting up in the next 60 minutes",
-
+    rainNow: "Raining now",
     maybeLightNow: "Possibly light rain now",
-    lightNow: "Light rain now",
+    dryNow: "Not raining",
+
+    heavyContinues: "Heavy rain continues",
+    easingSoon: "Easing off soon",
+    easingIn: "Easing in",
     heavySoon: "Heavy rain soon",
     heavyIn: "Heavy rain in",
-    noHeavy: "No heavy rain yet",
-    lightLasts: "Light rain may last over 60 minutes",
-    mayStop: (clock) => `May stop around ${clock}`,
-
-    maybeSoon: "Rain possible soon",
-    maybeIn: "Rain possible in",
-    drizzle: (clock) => `Around ${clock}, very light rain or drizzle`,
+    rainLasts: "Rain continues",
+    stopSoon: "Stopping soon",
+    stopIn: "May stop in",
     soon: "Rain soon",
     rainIn: "Rain in",
+    maybeSoon: "Light rain possible soon",
+    maybeIn: "Light rain possible in",
+    noRain: (n) => `No rain in the next ${n} minutes`,
+
+    noEasing: (n) => `No sign of letting up in the next ${n} minutes`,
+    noStop: (n) => `No sign of stopping in the next ${n} minutes`,
+    drizzle: (clock) => `Around ${clock}, very light rain or drizzle`,
     heavyAfter: (n, clock) => `Heavy rain in about ${n} min (${clock})`,
     moderate: (clock) => `Around ${clock}, moderate rain`,
-
-    dry: "Looking dry",
-    noRain: "No rain in the next 60 minutes",
     noRainDetail: "Radar shows no rain heading your way",
   },
 
@@ -151,6 +161,24 @@ export const en: Dict = {
       events: (events, regions) => `${events} rain events from ${regions} regions.`,
       fewEvents: (need) => `Fewer than ${need} rain events: differences between settings may still be noise.`,
       groups: "By climate group",
+      classes: "By kind of rain",
+      classesNote:
+        "Overall CSI on each kind of rain and Δ from TREC 4 pairs. For a band (light, moderate, heavy) a hit needs the right band; for a threshold (… or worse) reaching it is enough. Scored point by point, so rain a little off is a miss. Kinds with few observed samples have noisy scores.",
+      classLabel: (lo, hi) => en.admin.backtest.classNames[`${lo}-${hi ?? ""}`],
+      classNames: {
+        "20-30": "Light",
+        "30-40": "Moderate",
+        "40-50": "Heavy",
+        "50-": "Very heavy",
+        "30-": "Moderate or worse",
+        "40-": "Heavy or worse",
+      },
+      fss: "Allowing for position errors (FSS)",
+      fssNote:
+        "Fractions skill score: compares the share of area raining in a square around each point, so rain forecast a few km off still scores. 1 is perfect, 0 no skill; the small number is the difference from TREC 4 pairs (in points). The ~10 km square is about point by point.",
+      fssThreshold: (dbz) => `≥ ${dbz} dBZ`,
+      fssWindow: (km) => `~${Math.round(km)} km`,
+      observed: (n) => `${n.toLocaleString("en")} samples`,
       group: "Group",
       regionsCol: "Regions",
       eventsCol: "Rain events",
@@ -167,12 +195,9 @@ export const en: Dict = {
         hs: "Horn–Schunck",
         lk: "Lucas–Kanade",
         ensemble: "Ensemble mean",
-        vote: "Ensemble vote",
       },
       pairsSuffix: (pairs) => ` ${pairs} ${pairs === 1 ? "pair" : "pairs"}`,
       trendSuffix: " + trend",
-      accelSuffix: " + acceleration",
-      stormSuffix: " + storm lives",
       csiCi: "Overall CSI [95%]",
       delta: "Δ vs TREC 4 pairs",
       bss: "BSS",
@@ -182,7 +207,7 @@ export const en: Dict = {
       better: "surely better",
       worse: "surely worse",
       intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
-      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening; “+ acceleration” lets rain keep speeding up or slowing down as it just did; “+ storm lives” sets the trend from each storm cell's life (forming, merging, splitting, decaying). Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
+      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
     },
 
     history: {
@@ -211,6 +236,9 @@ export const en: Dict = {
       motion: "Motion",
       motionValue: (kmh, dir, deg) => `${kmh} km/h heading ${dir} (${deg}°)`,
       noMotion: "not enough data",
+      coherence: "Member agreement",
+      gain: "Motion explains radar",
+      member: (method) => `${method.toUpperCase()} motion`,
       threshold: "Thresholds",
       thresholdValue: (rain, heavy) => `rain ≥ ${rain} dBZ · heavy ≥ ${heavy} dBZ`,
       minuteFromFrame: "Minute (from frame)",

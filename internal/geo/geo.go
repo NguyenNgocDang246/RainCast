@@ -23,6 +23,14 @@ func LatLonToPixel(lat, lon float64, z int) (x, y float64) {
 	return x, y
 }
 
+// LatLonToIndex returns global pixel coordinates at zoom z with pixel (i, j)
+// centered on (i, j), as radar.Grid indexes them. LatLonToPixel puts pixel i
+// over [i, i+1), so rounding its result picks the wrong pixel half the time.
+func LatLonToIndex(lat, lon float64, z int) (x, y float64) {
+	x, y = LatLonToPixel(lat, lon, z)
+	return x - 0.5, y - 0.5
+}
+
 // PixelToLatLon is the inverse of LatLonToPixel.
 func PixelToLatLon(x, y float64, z int) (lat, lon float64) {
 	s := worldSize(z)

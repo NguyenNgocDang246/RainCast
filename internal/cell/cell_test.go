@@ -183,18 +183,6 @@ func TestLifecycleGrowthAndBirth(t *testing.T) {
 		t.Errorf("new cell %+v, want new", flags([]Storm{born}))
 	}
 
-	// The trend follows the storms where they cover a block.
-	tr := &motion.Trend{BlockSize: 32, BW: 8, BH: 8, R: make([]float64, 64)}
-	adj := AdjustTrend(tr, s, 256)
-	if r := adj.R[(80/32)*8+70/32]; math.Abs(r-0.4) > 0.05 {
-		t.Errorf("trend at the growing cell %.2f, want ≈ 0.4", r)
-	}
-	if r := adj.R[(180/32)*8+180/32]; r < initRate-1e-9 {
-		t.Errorf("trend at the new cell %.2f, want at least %.2f", r, initRate)
-	}
-	if adj.R[0] != 0 || tr.R[(180/32)*8+180/32] != 0 {
-		t.Error("blocks without storms changed, or the input trend was modified")
-	}
 }
 
 type flagView struct {

@@ -155,6 +155,15 @@ function ForecastDetail({ f }: { f: Forecast }) {
               : tt.noMotion
           }
         />
+        {f.motion_coherence !== undefined && <Row k={tt.coherence} v={f.motion_coherence.toFixed(2)} />}
+        <Row k={tt.gain} v={f.motion_gain !== undefined ? f.motion_gain.toFixed(2) : "—"} />
+        {f.motion_members?.map((m) => (
+          <Row
+            key={m.method}
+            k={tt.member(m.method)}
+            v={tt.motionValue(m.speed_kmh.toFixed(1), compass(m.direction_deg, locale), m.direction_deg.toFixed(0))}
+          />
+        ))}
         <Row k={tt.threshold} v={tt.thresholdValue(f.threshold_dbz, f.heavy_dbz)} />
       </dl>
       <div className="max-h-72 overflow-y-auto">

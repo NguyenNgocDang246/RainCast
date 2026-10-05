@@ -23,3 +23,9 @@ func RainRate(dbz float32) float64 {
 	d := math.Min(float64(dbz), qpeMaxDBZ)
 	return math.Pow(math.Pow(10, d/10)/zrA, 1/zrB)
 }
+
+// DBZ is the reflectivity RainRate turns into mm/h rain, its inverse
+// between qpeMinDBZ and qpeMaxDBZ.
+func DBZ(mmh float64) float32 {
+	return float32(10 * math.Log10(zrA*math.Pow(mmh, zrB)))
+}

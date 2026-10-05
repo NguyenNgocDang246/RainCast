@@ -8,22 +8,22 @@ import (
 )
 
 // preparedWire is Prepared with exported fields and no nil pointers, which
-// gob cannot encode inside slices.
+// gob cannot encode inside slices. The previous frame is left out (a whole
+// grid is too big to share), so a decoded Prepared reports no MotionGain.
 type preparedWire struct {
 	Fields   []motion.Field
 	Trends   []motion.Trend
 	HasTrend []bool
-	Accels   []motion.Field
-	HasAccel []bool
 	Weights  []float64
 	Used     int
 	Display  motion.Field
 	Storms   []StormInfo
+	Methods  []string
 }
 
 // MarshalBinary encodes p, e.g. to share it through a cache.
 func (p *Prepared) MarshalBinary() ([]byte, error) {
-	w := preparedWire{Weights: p.weights, Used: p.Used, Storms: p.Storms}
+	w := preparedWire{Weights: p.weights, Used: p.Used, Storms: p.Storms, Methods: p.methods}
 	for i, f := range p.fields {
 		w.Fields = append(w.Fields, *f)
 		t := p.trends[i]
@@ -32,12 +32,6 @@ func (p *Prepared) MarshalBinary() ([]byte, error) {
 			t = &motion.Trend{}
 		}
 		w.Trends = append(w.Trends, *t)
-		a := p.accels[i]
-		w.HasAccel = append(w.HasAccel, a != nil)
-		if a == nil {
-			a = &motion.Field{}
-		}
-		w.Accels = append(w.Accels, *a)
 	}
 	if p.Display != nil {
 		w.Display = *p.Display
@@ -56,17 +50,17 @@ func (p *Prepared) UnmarshalBinary(data []byte) error {
 	*p = Prepared{weights: w.Weights, Used: w.Used, Storms: w.Storms}
 	for i := range w.Fields {
 		p.fields = append(p.fields, &w.Fields[i])
+		// Entries cached before methods were kept have none.
+		method := ""
+		if i < len(w.Methods) {
+			method = w.Methods[i]
+		}
+		p.methods = append(p.methods, method)
 		var t *motion.Trend
 		if w.HasTrend[i] {
 			t = &w.Trends[i]
 		}
 		p.trends = append(p.trends, t)
-		// Entries cached before acceleration existed have no HasAccel.
-		var a *motion.Field
-		if i < len(w.HasAccel) && w.HasAccel[i] {
-			a = &w.Accels[i]
-		}
-		p.accels = append(p.accels, a)
 	}
 	p.Display = &w.Display
 	return nil

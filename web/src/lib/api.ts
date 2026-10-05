@@ -2,12 +2,17 @@
 export type Forecast = {
   location: { lat: number; lon: number };
   frame_time: string;
+  /** When the next radar frame is expected: no newer forecast before then. */
+  next_due?: string;
   threshold_dbz: number;
   /** Below this, rain is only "possible" (very light echoes may not reach the ground). */
   likely_dbz: number;
   heavy_dbz: number;
-  /** Predicted reflectivity over the target, minute by minute from frame_time. */
-  series: { minute: number; dbz: number }[];
+  /**
+   * Predicted reflectivity over the target, minute by minute from frame_time,
+   * with the rain falling in that minute (absent when none).
+   */
+  series: { minute: number; dbz: number; mm?: number }[];
   raining_now: boolean;
   /** First minute (from frame_time) with rain, or -1 if none within 60 minutes. */
   arrival_min: number;
@@ -17,6 +22,16 @@ export type Forecast = {
   /** Where the rain is heading, clockwise from north. */
   direction_deg: number;
   motion_reliable: boolean;
+  /** How much the ensemble's members agree on the motion: |mean| / mean speed, 0–1. */
+  motion_coherence?: number;
+  /**
+   * How well the motion explains the last radar change: near 1 it is how the
+   * rain moved, 0 or below no better than standing still. Absent when it
+   * cannot tell.
+   */
+  motion_gain?: number;
+  /** Each motion method's own motion. */
+  motion_members?: { method: string; speed_kmh: number; direction_deg: number }[];
   /** Rain expected over the 60 minutes after frame_time, in mm (estimated from radar). */
   accum_mm?: number;
   /** Storm cells within 15 km that are forming or strengthening. */
@@ -33,14 +48,28 @@ export type Place = { name: string; address: string; lat: number; lon: number };
  */
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
+/** The error of a request that got no answer at all: offline, blocked or cut off. */
+export const NETWORK_ERROR = "network error";
+
+/** fetch, with a failure to reach the server thrown as NETWORK_ERROR; an abort stays an abort. */
+async function request(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch (e) {
+    if (e instanceof DOMException && e.name === "AbortError") throw e;
+    throw new Error(NETWORK_ERROR);
+  }
+}
+
 async function getJSON<T>(path: string, signal?: AbortSignal): Promise<T> {
-  return readJSON<T>(await fetch(API_BASE + path, { cache: "no-store", signal }));
+  return readJSON<T>(await request(API_BASE + path, { cache: "no-store", signal }));
 }
 
 async function readJSON<T>(res: Response): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    // Kept in the backend's words; components translate with errorText.
+    // Kept in the backend's words (or the status, from a proxy's error
+    // page); components translate with userError or errorText.
     throw new Error(body?.error ?? `HTTP ${res.status}`);
   }
   return res.json() as Promise<T>;
@@ -80,7 +109,7 @@ export async function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<
     const plan = answer.tiles_needed;
     const tiles = await Promise.all(
       plan.tiles.map(async (t) => {
-        const res = await fetch(t.url, { cache: "force-cache" });
+        const res = await request(t.url, { cache: "force-cache" });
         if (!res.ok) throw new Error(`radar tile: HTTP ${res.status}`);
         return new Uint8Array(await res.arrayBuffer());
       }),
@@ -90,7 +119,7 @@ export async function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<
 
     const form = new FormData();
     plan.tiles.forEach((t, i) => form.append(`${t.time}_${t.x}_${t.y}`, new Blob([tiles[i]], { type: "image/png" }), "tile.png"));
-    const res = await fetch(API_BASE + path, { method: "POST", body: form, cache: "no-store" });
+    const res = await request(API_BASE + path, { method: "POST", body: form, cache: "no-store" });
     // A new radar frame arrived meanwhile: the answer carries the new plan.
     if (res.status === 409 && attempt === 0) {
       answer = (await res.json()) as TilesNeeded;
@@ -116,8 +145,8 @@ export function suggest(query: string, near: Pick<Place, "lat" | "lon"> | null, 
   return getJSON<Place[]>(`/api/suggest?q=${encodeURIComponent(query)}${bias}`, signal);
 }
 
-/** The radar frame forecasts start from, as a Leaflet tile URL template. */
-export type RadarFrame = { time: string; tile_url: string; max_zoom: number };
+/** The radar frame forecasts start from, as a Leaflet tile URL template, and when the next is expected. */
+export type RadarFrame = { time: string; tile_url: string; max_zoom: number; next_due?: string };
 
 export function fetchRadar(): Promise<RadarFrame> {
   return getJSON<RadarFrame>("/api/radar");

@@ -21,11 +21,6 @@ type Options struct {
 	// rate·τ·(1−e^(−m/τ)), so a trend never runs away over the hour.
 	Trend    *motion.Trend
 	TrendTau float64 // minutes; default 20
-	// Accel, when set, lets motion keep changing as it did lately (pixels
-	// per minute²), damped the same way: after s minutes the velocity has
-	// changed by A·τ·(1−e^(−s/τ)), at most A·τ.
-	Accel    *motion.Field
-	AccelTau float64 // minutes; default 20
 	// ProbRadius, when set, also yields a rain probability per minute: the
 	// share of pixels at or above Threshold within ProbRadius(m) pixels of
 	// the upstream point. The radius grows with lead time because position
@@ -46,6 +41,9 @@ type Point struct {
 	DBZ    float32 `json:"dbz"`
 	// Prob is the chance of rain, when Options.ProbRadius is set.
 	Prob float32 `json:"prob,omitempty"`
+	// MM is the rain falling during this minute, from radar.RainRate (set by
+	// Summarize), so a client can total the rain from any minute on.
+	MM float32 `json:"mm,omitempty"`
 }
 
 // Result is a forecast for one target point.
@@ -62,9 +60,33 @@ type Result struct {
 	SpeedKmh       float64 `json:"speed_kmh"`
 	DirectionDeg   float64 `json:"direction_deg"`
 	MotionReliable bool    `json:"motion_reliable"`
+	// MotionCoherence, MotionGain and MotionMembers diagnose the motion
+	// (set by an ensemble): how much the members agree (|mean| / mean
+	// speed, 0–1), how well the motion explains the last radar change
+	// (motion.TranslationGain; nil when it cannot tell), and each member's
+	// own motion.
+	MotionCoherence float64        `json:"motion_coherence,omitempty"`
+	MotionGain      *float64       `json:"motion_gain,omitempty"`
+	MotionMembers   []MemberMotion `json:"motion_members,omitempty"`
 	// AccumMM is the rain expected over the horizon, in mm, from the
 	// series through radar.RainRate.
 	AccumMM float64 `json:"accum_mm"`
+}
+
+// MemberMotion is one motion method's motion at the target.
+type MemberMotion struct {
+	Method       string  `json:"method"`
+	SpeedKmh     float64 `json:"speed_kmh"`
+	DirectionDeg float64 `json:"direction_deg"`
+}
+
+// Heading converts a motion vector in pixels per minute to km/h and the
+// direction it heads, clockwise from north.
+func Heading(v motion.Vector, kmPerPx float64) (kmh, deg float64) {
+	kmh = math.Hypot(v.DX, v.DY) * kmPerPx * 60
+	// Pixel Y grows southward, so north is -DY.
+	deg = math.Mod(math.Atan2(v.DX, -v.DY)*180/math.Pi+360, 360)
+	return kmh, deg
 }
 
 // ProbAt returns the rain probability at minute m (clamped to the series).
@@ -88,7 +110,7 @@ func (r Result) At(m int) float32 {
 // Forecast traces backward from target (x, y) through field f: the echo that
 // will be over the target in m minutes is the one now at the upstream point
 // (semi-Lagrangian advection, assuming steady motion and no growth/decay
-// unless opt.Accel and opt.Trend say otherwise). Each one-minute step uses
+// unless opt.Trend says otherwise). Each one-minute step uses
 // the velocity at its midpoint, so curved paths are followed closely.
 func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result {
 	r := Result{Series: make([]Point, 0, opt.Horizon+1)}
@@ -96,30 +118,13 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 	if tau <= 0 {
 		tau = 20
 	}
-	atau := opt.AccelTau
-	if atau <= 0 {
-		atau = 20
-	}
-	// accelShift is the extra displacement acceleration adds by minute s.
-	accelShift := func(s float64) float64 { return atau*s - atau*atau*(1-math.Exp(-s/atau)) }
-	vel := func(px, py, gain float64) motion.Vector {
-		v := f.At(px, py)
-		if opt.Accel != nil {
-			a := opt.Accel.At(px, py)
-			v.DX += a.DX * gain
-			v.DY += a.DY * gain
-		}
-		return v
-	}
 	px, py := x, y
 	for m := 0; m <= opt.Horizon; m++ {
 		v := g.MedianInRadius(px, py, opt.Radius)
 		// Only existing echoes change; empty sky does not grow rain.
 		var delta float64
-		if opt.Trend != nil && m > 0 {
+		if opt.Trend != nil && m > 0 && v >= 10 {
 			delta = opt.Trend.At(px, py) * tau * (1 - math.Exp(-float64(m)/tau))
-		}
-		if delta != 0 && v >= 10 {
 			v = float32(math.Min(float64(v)+delta, trendCeiling))
 		}
 		pt := Point{Minute: m, DBZ: v}
@@ -130,14 +135,8 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 		}
 		r.Series = append(r.Series, pt)
 		if f != nil {
-			// Steady motion moves an echo the same distance every minute;
-			// acceleration adds accelShift(m+1)−accelShift(m) for this one.
-			// Along the backward path the minutes are taken nearest the
-			// target first, which only matters where acceleration varies
-			// over the distance travelled.
-			gain := accelShift(float64(m+1)) - accelShift(float64(m))
-			d := vel(px, py, gain)
-			d = vel(px-d.DX/2, py-d.DY/2, gain)
+			d := f.At(px, py)
+			d = f.At(px-d.DX/2, py-d.DY/2)
 			px -= d.DX
 			py -= d.DY
 		}
@@ -147,9 +146,7 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 	if f != nil {
 		r.MotionReliable = f.Reliable()
 		v := f.At(x, y)
-		r.SpeedKmh = math.Hypot(v.DX, v.DY) * opt.KmPerPx * 60
-		// Pixel Y grows southward, so north is -DY.
-		r.DirectionDeg = math.Mod(math.Atan2(v.DX, -v.DY)*180/math.Pi+360, 360)
+		r.SpeedKmh, r.DirectionDeg = Heading(v, opt.KmPerPx)
 	}
 	return r
 }
@@ -157,11 +154,15 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 // Summarize fills a result's arrival times from its series: the first
 // minute at or above opt.Threshold (rain) and opt.Heavy (heavy rain); and
 // the accumulated rain, each minute after the first adding a minute of it.
+// It also fills each point's MM.
 func Summarize(series []Point, opt Options) Result {
 	r := Result{Series: series, ArrivalMin: -1, HeavyArrivalMin: -1}
-	for i, pt := range series {
+	for i := range series {
+		pt := &series[i]
+		mm := radar.RainRate(pt.DBZ) / 60
+		pt.MM = float32(mm)
 		if i > 0 {
-			r.AccumMM += radar.RainRate(pt.DBZ) / 60
+			r.AccumMM += mm
 		}
 		if pt.DBZ >= opt.Threshold && r.ArrivalMin < 0 {
 			r.ArrivalMin = pt.Minute

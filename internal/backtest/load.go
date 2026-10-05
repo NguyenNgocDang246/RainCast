@@ -12,73 +12,57 @@ import (
 
 // methodNames label the methods in reports and the CLI.
 var methodNames = map[string]string{
-	MethodTREC: "TREC", MethodHS: "Horn–Schunck", MethodLK: "Lucas–Kanade",
-	MethodMean: "Ensemble TB", MethodVote: "Ensemble bỏ phiếu",
+	MethodTREC: "TREC", MethodHS: "Horn–Schunck", MethodLK: "Lucas–Kanade", MethodMean: "Ensemble TB",
 }
 
-// motionPairs is how many frame pairs every method other than the TREC
-// sweep averages, the pipeline's setting.
+// motionPairs is how many frame pairs every method averages, the
+// pipeline's setting.
 const motionPairs = 4
 
-// DefaultConfig scores TREC over 1–8 frame pairs and every method at 4
-// pairs plain, + trend, and each upgrade on top of the trend on its own
-// (+ acceleration, + storm lives), so each method's gain from each shows;
-// and the ensembles of the three methods. TREC with 4 pairs, what the app serves, is the
-// reference.
+// DefaultConfig scores every method at 4 pairs, plain and + trend, and the
+// equal mean of the three both ways (model.Default is the mean + trend).
+// TREC is the reference.
 func DefaultConfig(step int) Config {
 	cfg := Config{
-		Leads: []int{10, 20, 30, 40, 50, 60}, Threshold: 20, Radius: 2, TrendTau: 20,
+		Leads: []int{10, 20, 30, 40, 50, 60}, Threshold: 20, Classes: DefaultClasses(), Radius: 2, TrendTau: 20,
+		FSSThresholds: []float32{20, 30, 40}, FSSWindows: []int{1, 3, 5},
 		Step: step, StepSec: 600, EventRain: 0.02, EventFrames: 6,
 	}
-	name := func(method string, pairs int, trend bool, up ...string) string {
+	name := func(method string, trend bool) string {
 		n := methodNames[method]
 		if method == MethodTREC {
-			n = fmt.Sprintf("TREC %d cặp", pairs)
+			n = fmt.Sprintf("TREC %d cặp", motionPairs)
 		}
 		if trend {
 			n += " + xu hướng"
 		}
-		for _, u := range up {
-			n += " + " + u
-		}
 		return n
 	}
-	for _, p := range []int{1, 2, 4, 8} {
-		cfg.Variants = append(cfg.Variants, Variant{Name: name(MethodTREC, p, false), Method: MethodTREC, Pairs: p})
-	}
-	cfg.Reference = name(MethodTREC, motionPairs, false)
-	methods := []string{MethodTREC, MethodHS, MethodLK}
-	var plain, trended, accel, storm []string
-	for _, m := range methods {
-		plain = append(plain, name(m, motionPairs, false))
-		trended = append(trended, name(m, motionPairs, true))
-		accel = append(accel, name(m, motionPairs, true, "gia tốc"))
-		storm = append(storm, name(m, motionPairs, true, "khối mưa"))
-		if m != MethodTREC {
-			cfg.Variants = append(cfg.Variants, Variant{Name: name(m, motionPairs, false), Method: m, Pairs: motionPairs})
-		}
+	cfg.Reference = name(MethodTREC, false)
+	var plain, trended []string
+	for _, m := range []string{MethodTREC, MethodHS, MethodLK} {
+		plain = append(plain, name(m, false))
+		trended = append(trended, name(m, true))
 		cfg.Variants = append(cfg.Variants,
-			Variant{Name: name(m, motionPairs, true), Method: m, Pairs: motionPairs, Trend: true},
-			Variant{Name: name(m, motionPairs, true, "gia tốc"), Method: m, Pairs: motionPairs, Trend: true, Accel: true},
-			Variant{Name: name(m, motionPairs, true, "khối mưa"), Method: m, Pairs: motionPairs, Trend: true, Storm: true})
+			Variant{Name: name(m, false), Method: m, Pairs: motionPairs},
+			Variant{Name: name(m, true), Method: m, Pairs: motionPairs, Trend: true})
 	}
-	// Weighted ensembles of the motion fields, learned per fold.
-	top := []string{name(MethodLK, motionPairs, false), name(MethodHS, motionPairs, false),
-		name(MethodTREC, motionPairs, false)}
-	cfg.WeightMembers = top
 	cfg.Variants = append(cfg.Variants,
-		Variant{Name: "Ensemble trọng số kỹ năng", Method: MethodWeighted, Members: top, Weighting: WeightSkill},
-		Variant{Name: "Ensemble trọng số theo mốc", Method: MethodWeighted, Members: top, Weighting: WeightLead},
-		Variant{Name: "Ensemble hồi quy", Method: MethodWeighted, Members: top, Weighting: WeightRegress},
+		Variant{Name: name(MethodMean, false), Method: MethodMean, Members: plain},
+		Variant{Name: name(MethodMean, true), Method: MethodMean, Members: trended, Trend: true},
 	)
-	// The equal mean of the three, with and without the trend, is model.Default.
-	cfg.Variants = append(cfg.Variants,
-		Variant{Name: methodNames[MethodMean], Method: MethodMean, Members: plain},
-		Variant{Name: methodNames[MethodMean] + " + xu hướng", Method: MethodMean, Members: trended, Trend: true},
-		Variant{Name: methodNames[MethodMean] + " + xu hướng + gia tốc", Method: MethodMean, Members: accel, Trend: true, Accel: true},
-		Variant{Name: methodNames[MethodMean] + " + xu hướng + khối mưa", Method: MethodMean, Members: storm, Trend: true, Storm: true},
-		Variant{Name: methodNames[MethodVote], Method: MethodVote, Members: plain},
-	)
+	return cfg
+}
+
+// PaperConfig scores the way published nowcast verifications do, so CSIs
+// compare with theirs: every sample is its own pixel (~1.2 km) rather than
+// the median of a disc around it, which smooths both sides; leads run to 90
+// minutes; and the classes are their rain-rate and reflectivity thresholds.
+func PaperConfig(step int) Config {
+	cfg := DefaultConfig(step)
+	cfg.Radius = 0
+	cfg.Leads = []int{10, 20, 30, 40, 50, 60, 70, 80, 90}
+	cfg.Classes = PaperClasses()
 	return cfg
 }
 
@@ -152,9 +136,8 @@ type Options struct {
 	StateFile string
 	// Keep drops saved scores older than this (0 keeps all).
 	Keep time.Duration
-	// WeightsFile holds the statistics weighted ensembles learn from: read
-	// before the run, rewritten after it.
-	WeightsFile string
+	// Config replaces DefaultConfig(Step) when set, e.g. PaperConfig.
+	Config *Config
 }
 
 // RunStored scores every collected region over the recorded frames.
@@ -199,10 +182,10 @@ func RunStored(ctx context.Context, st *store.Store, cacheDir string, o Options)
 	}
 
 	cfg := DefaultConfig(o.Step)
-	cfg.Parallel, cfg.Workers = o.Parallel, o.Workers
-	if o.WeightsFile != "" {
-		cfg.Weights = LearnWeights(LoadWeightStats(o.WeightsFile, cfg.WeightMembers, cfg.Leads))
+	if o.Config != nil {
+		cfg = *o.Config
 	}
+	cfg.Parallel, cfg.Workers = o.Parallel, o.Workers
 	var state *State
 	if o.StateFile != "" {
 		state = LoadState(o.StateFile)
@@ -219,11 +202,6 @@ func RunStored(ctx context.Context, st *store.Store, cacheDir string, o Options)
 	}
 	if o.StateFile != "" {
 		if err := state.Save(o.StateFile); err != nil {
-			return Report{}, err
-		}
-	}
-	if o.WeightsFile != "" && state.WStats != nil {
-		if err := state.WStats.Save(o.WeightsFile); err != nil {
 			return Report{}, err
 		}
 	}

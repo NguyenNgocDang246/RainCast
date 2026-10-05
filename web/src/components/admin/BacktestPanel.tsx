@@ -25,7 +25,11 @@ export function BacktestPanel() {
     if (r.baseline ?? i === 0) return b.baseline;
     if (r.method && b.methods[r.method]) {
       const pairs = r.method === "trec" && r.pairs ? b.pairsSuffix(r.pairs) : "";
-      return b.methods[r.method] + pairs + (r.trend ? b.trendSuffix : "") + (r.accel ? b.accelSuffix : "") + (r.storm ? b.stormSuffix : "");
+      return (
+        b.methods[r.method] +
+        pairs +
+        (r.trend ? b.trendSuffix : "")
+      );
     }
     const m = r.name.match(/^(\d+) cặp( \+ xu hướng)?$/);
     const pairs = r.pairs ?? (m ? Number(m[1]) : 0);
@@ -35,6 +39,9 @@ export function BacktestPanel() {
     v ? ` [${Math.round(v[0] * 100)}–${Math.round(v[1] * 100)}]` : "";
   const num = (v?: number | null) => (v == null ? "–" : v.toFixed(2));
   // The best overall CSI among model variants (the baseline is row 0).
+  // FSS columns, as the first result has them.
+  const fss = results[0]?.fss ?? [];
+  const fssThresholds = [...new Set(fss.map((f) => f.threshold))];
   const best = results
     .slice(1)
     .reduce<number | null>((m, r) => Math.max(m ?? 0, r.overall.csi ?? 0), null);
@@ -126,6 +133,105 @@ export function BacktestPanel() {
               </tbody>
             </table>
           </div>
+          {(results[0]?.classes?.length ?? 0) > 0 && (
+            <>
+              <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.classes}</h3>
+              <p className="mb-2 text-xs text-slate-500">{b.classesNote}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-270 text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-800">
+                      <th className={th}>{b.config}</th>
+                      {results[0].classes!.map((c) => (
+                        <th key={c.class} className={th}>
+                          {b.classLabel(c.lo, c.hi) ?? c.class}
+                          <span className="block text-xs font-normal text-slate-500">
+                            {b.observed(
+                              Math.max(
+                                ...results.map(
+                                  (r) => r.classes?.find((x) => x.class === c.class)?.observed ?? 0,
+                                ),
+                              ),
+                            )}
+                          </span>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r, i) => (
+                      <tr key={r.name} className="border-b border-slate-800/60">
+                        <td className={`${td} text-slate-100`}>{label(r, i)}</td>
+                        {(r.classes ?? []).map((c) => (
+                          <td key={c.class} className={`${td} whitespace-nowrap`}>
+                            {pct(c.overall.csi)}
+                            {c.delta_csi != null && (
+                              <span className="ml-2 text-xs text-slate-400">
+                                <Delta r={c} better={b.better} worse={b.worse} />
+                              </span>
+                            )}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+          {fss.length > 0 && (
+            <>
+              <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.fss}</h3>
+              <p className="mb-2 text-xs text-slate-500">{b.fssNote}</p>
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-270 text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-800">
+                      <th className={th} rowSpan={2}>
+                        {b.config}
+                      </th>
+                      {fssThresholds.map((thr) => (
+                        <th
+                          key={thr}
+                          className={th}
+                          colSpan={fss.filter((f) => f.threshold === thr).length}
+                        >
+                          {b.fssThreshold(thr)}
+                        </th>
+                      ))}
+                    </tr>
+                    <tr className="border-b border-slate-800">
+                      {fss.map((f) => (
+                        <th key={`${f.threshold}-${f.window}`} className={`${th} font-normal`}>
+                          {b.fssWindow(f.window_km)}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((r, i) => (
+                      <tr key={r.name} className="border-b border-slate-800/60">
+                        <td className={`${td} text-slate-100`}>{label(r, i)}</td>
+                        {fss.map((f) => {
+                          const s = r.fss?.find(
+                            (x) => x.threshold === f.threshold && x.window === f.window,
+                          );
+                          return (
+                            <td key={`${f.threshold}-${f.window}`} className={`${td} whitespace-nowrap`}>
+                              {num(s?.overall)}
+                              {s?.delta_fss != null && (
+                                <span className="ml-1 text-xs text-slate-500">{signed(s.delta_fss)}</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
           {report.groups && report.groups.length > 1 && (
             <>
               <h3 className="mt-6 mb-2 text-xs font-semibold text-slate-400">{b.groups}</h3>
@@ -180,7 +286,15 @@ export function BacktestPanel() {
 const signed = (v: number) => `${v > 0 ? "+" : ""}${(v * 100).toFixed(1)}`;
 
 /** Difference from the reference with its interval; ▲/▼ only when the whole interval clears 0. */
-function Delta({ r, better, worse }: { r: BacktestResult; better: string; worse: string }) {
+function Delta({
+  r,
+  better,
+  worse,
+}: {
+  r: { delta_csi?: number; delta_csi_ci?: [number, number] };
+  better: string;
+  worse: string;
+}) {
   if (r.delta_csi == null) return <>–</>;
   const iv = r.delta_csi_ci;
   const sure = iv ? (iv[0] > 0 ? "up" : iv[1] < 0 ? "down" : null) : null;

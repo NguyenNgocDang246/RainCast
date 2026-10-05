@@ -160,26 +160,6 @@ func TestMidpointFollowsRotation(t *testing.T) {
 	}
 }
 
-// A cell 20 px west moving east at 0.2 px/min arrives at ~100 min; speeding
-// up by 0.01 px/min² (damped, τ = 20) brings it just inside the hour.
-func TestAccelBringsArrivalForward(t *testing.T) {
-	g := radar.NewGrid(128, 128)
-	disc(g, 64-20-3, 64, 3, 40)
-	f := uniformField(motion.Vector{DX: 0.2})
-	steady := Forecast(g, f, 64, 64, Options{Horizon: 60, Threshold: 20})
-	if steady.ArrivalMin != -1 {
-		t.Fatalf("steady arrival = %d, want none within the hour", steady.ArrivalMin)
-	}
-	r := Forecast(g, f, 64, 64, Options{Horizon: 60, Threshold: 20, Accel: uniformField(motion.Vector{DX: 0.01}), AccelTau: 20})
-	// 0.2·m + 0.01·(20m − 400(1−e^(−m/20))) = 20 near m = 59.
-	if r.ArrivalMin < 57 || r.ArrivalMin > 60 {
-		t.Fatalf("arrival with acceleration = %d, want ~59", r.ArrivalMin)
-	}
-	if r.SpeedKmh != steady.SpeedKmh {
-		t.Errorf("reported speed changed with acceleration: %v vs %v", r.SpeedKmh, steady.SpeedKmh)
-	}
-}
-
 // 40 dBZ (≈ 11.5 mm/h) for half an hour is ≈ 5.8 mm.
 func TestAccumulation(t *testing.T) {
 	g := radar.NewGrid(128, 128)
@@ -187,6 +167,13 @@ func TestAccumulation(t *testing.T) {
 	r := Forecast(g, uniformField(motion.Vector{}), 64, 64, Options{Horizon: 30, Threshold: 20})
 	if math.Abs(r.AccumMM-radar.RainRate(40)/2) > 1e-9 || math.Abs(r.AccumMM-5.75) > 0.1 {
 		t.Fatalf("accum = %.2f mm, want ≈ 5.75", r.AccumMM)
+	}
+	var sum float64
+	for _, pt := range r.Series[1:] {
+		sum += float64(pt.MM)
+	}
+	if math.Abs(sum-r.AccumMM) > 1e-3 {
+		t.Fatalf("points' mm total %.4f, accum %.4f", sum, r.AccumMM)
 	}
 	if d := Forecast(radar.NewGrid(64, 64), nil, 32, 32, Options{Horizon: 60, Threshold: 20}); d.AccumMM != 0 {
 		t.Fatalf("dry accum = %v", d.AccumMM)
