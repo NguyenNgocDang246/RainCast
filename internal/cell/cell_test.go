@@ -58,36 +58,6 @@ func TestHungarianOptimal(t *testing.T) {
 	}
 }
 
-// Two cells 20 px apart both move 14 px east: the leading edge of the
-// first lands next to where the second was. Nearest neighbor sends both to
-// the second cell; the optimal assignment keeps them apart.
-func TestHungarianBeatsNearestOnCloseCells(t *testing.T) {
-	prev, cur := radar.NewGrid(256, 128), radar.NewGrid(256, 128)
-	disc(prev, 100, 64, 6, 50)
-	disc(prev, 120, 64, 6, 50)
-	disc(cur, 114, 64, 6, 50)
-	disc(cur, 134, 64, 6, 50)
-	pc, cc := Segment(prev, 30, 16), Segment(cur, 30, 16)
-	if len(pc) != 2 || len(cc) != 2 {
-		t.Fatalf("cells: %d, %d", len(pc), len(cc))
-	}
-	right := func(pairs []Pair) bool {
-		ok := 0
-		for _, p := range pairs {
-			if math.Abs(cc[p.Cur].X-pc[p.Prev].X-14) < 1 {
-				ok++
-			}
-		}
-		return ok == 2 && len(pairs) == 2
-	}
-	if right(MatchNearest(pc, cc, nil, 10, 20)) {
-		t.Error("nearest neighbor unexpectedly got it right; the test no longer shows the difference")
-	}
-	if pairs := MatchHungarian(pc, cc, nil, 10, 20); !right(pairs) {
-		t.Errorf("hungarian pairs %v are wrong", pairs)
-	}
-}
-
 func TestKalmanVelocity(t *testing.T) {
 	xs, ys := []float64{}, []float64{}
 	noise := []float64{0.8, -1.1, 0.4, 1.0, -0.6, 0.2}
@@ -101,9 +71,9 @@ func TestKalmanVelocity(t *testing.T) {
 	}
 }
 
-// Two storms crossing the area flow at different headings: the cell field
-// moves each with its own velocity.
-func TestFieldFollowsEachCell(t *testing.T) {
+// Two storms crossing the area flow at different headings: each tracked
+// cell gets its own velocity.
+func TestTrackFollowsEachCell(t *testing.T) {
 	var frames []*radar.Grid
 	var pairs []*motion.Field
 	for k := range 4 {
@@ -115,35 +85,117 @@ func TestFieldFollowsEachCell(t *testing.T) {
 			pairs = append(pairs, still(384, 384))
 		}
 	}
-	for name, m := range map[string]Matcher{"nearest": MatchNearest, "hungarian": MatchHungarian} {
-		f := Field(frames, pairs, 10, DefaultOptions(m))
-		a, b := f.At(109, 100), f.At(260, 232)
-		if math.Abs(a.DX-0.3) > 0.06 || math.Abs(a.DY) > 0.06 {
-			t.Errorf("%s: east cell moves %+v, want (0.3, 0)", name, a)
+	cells, vel := Track(frames, pairs, 10, DefaultOptions(MatchHungarian))
+	if len(cells) != 2 {
+		t.Fatalf("tracked %d cells, want 2", len(cells))
+	}
+	for i, c := range cells {
+		want := motion.Vector{DX: 0.3}
+		if c.X > 200 {
+			want = motion.Vector{DY: 0.4}
 		}
-		if math.Abs(b.DX) > 0.06 || math.Abs(b.DY-0.4) > 0.06 {
-			t.Errorf("%s: south cell moves %+v, want (0, 0.4)", name, b)
+		if math.Abs(vel[i].DX-want.DX) > 0.06 || math.Abs(vel[i].DY-want.DY) > 0.06 {
+			t.Errorf("cell at (%.0f, %.0f) moves %+v, want %+v", c.X, c.Y, vel[i], want)
 		}
 	}
-	// Hybrid keeps the base motion away from cells.
-	base := motion.FromBlocks(32, 12, 12, func() []motion.Vector {
-		v := make([]motion.Vector, 144)
+}
+
+func frames(n int, draw func(k int, g *radar.Grid)) []*radar.Grid {
+	out := make([]*radar.Grid, n)
+	for k := range out {
+		out[k] = radar.NewGrid(256, 256)
+		draw(k, out[k])
+	}
+	return out
+}
+
+func lifeOpt() Options { return DefaultOptions(MatchHungarian) }
+
+// One elongated cell breaks into two: both pieces are splits of it.
+func TestLifecycleSplit(t *testing.T) {
+	fs := frames(2, func(k int, g *radar.Grid) {
+		if k == 0 {
+			disc(g, 100, 100, 9, 50)
+			disc(g, 114, 100, 9, 50)
+		} else {
+			disc(g, 94, 100, 7, 50)
+			disc(g, 120, 100, 7, 50)
+		}
+	})
+	s := Lifecycle(fs, still(256, 256), 10, lifeOpt())
+	if len(s) != 2 || !s[0].Split || !s[1].Split || s[0].New || s[0].Merged {
+		t.Fatalf("storms %+v, want two splits", flags(s))
+	}
+}
+
+// Two cells flow into one.
+func TestLifecycleMerge(t *testing.T) {
+	fs := frames(2, func(k int, g *radar.Grid) {
+		if k == 0 {
+			disc(g, 94, 100, 7, 50)
+			disc(g, 120, 100, 7, 50)
+		} else {
+			disc(g, 100, 100, 9, 50)
+			disc(g, 114, 100, 9, 50)
+		}
+	})
+	s := Lifecycle(fs, still(256, 256), 10, lifeOpt())
+	if len(s) != 1 || !s[0].Merged || s[0].Split || s[0].New {
+		t.Fatalf("storms %+v, want one merge", flags(s))
+	}
+}
+
+// A cell moving east along the field and strengthening 4 dBZ per frame is
+// followed back through every frame, growing at 0.4 dBZ/min; a cell
+// appearing in the last frame is new.
+func TestLifecycleGrowthAndBirth(t *testing.T) {
+	fs := frames(3, func(k int, g *radar.Grid) {
+		disc(g, 60+5*float64(k), 80, 8, 40+4*float64(k))
+		if k == 2 {
+			disc(g, 180, 180, 6, 45)
+		}
+	})
+	east := motion.FromBlocks(32, 8, 8, func() []motion.Vector {
+		v := make([]motion.Vector, 64)
 		for i := range v {
-			v[i] = motion.Vector{DX: -0.1}
+			v[i] = motion.Vector{DX: 0.5}
 		}
 		return v
 	}(), func() []bool {
-		v := make([]bool, 144)
+		v := make([]bool, 64)
 		for i := range v {
 			v[i] = true
 		}
 		return v
 	}())
-	h := Hybrid(frames, pairs, base, 10, DefaultOptions(MatchHungarian))
-	if v := h.At(20, 350); math.Abs(v.DX+0.1) > 1e-9 {
-		t.Errorf("hybrid away from cells = %+v, want the base motion", v)
+	s := Lifecycle(fs, east, 10, lifeOpt())
+	if len(s) != 2 {
+		t.Fatalf("%d storms, want 2", len(s))
 	}
-	if v := h.At(109, 100); math.Abs(v.DX-0.3) > 0.1 {
-		t.Errorf("hybrid at the east cell = %+v, want the cell's motion", v)
+	grow, born := s[0], s[1]
+	if grow.X > born.X {
+		grow, born = born, grow
 	}
+	if grow.Age != 3 || grow.New || math.Abs(grow.RateDBZ-0.4) > 0.05 || grow.Decaying {
+		t.Errorf("growing cell %+v, want age 3 at 0.4 dBZ/min", flags([]Storm{grow}))
+	}
+	if !born.New || born.Age != 1 {
+		t.Errorf("new cell %+v, want new", flags([]Storm{born}))
+	}
+
+}
+
+type flagView struct {
+	X, Y                    float64
+	Age                     int
+	New, Merged, Split, Dec bool
+	Rate                    float64
+}
+
+func flags(s []Storm) []flagView {
+	var out []flagView
+	for _, x := range s {
+		out = append(out, flagView{x.X, x.Y, x.Age, x.New, x.Merged, x.Split, x.Decaying, x.RateDBZ})
+	}
+	return out
 }

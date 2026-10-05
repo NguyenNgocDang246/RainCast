@@ -54,15 +54,6 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 			corrIdx = i
 		}
 	}
-	var memberIdx []int
-	for _, m := range cfg.WeightMembers {
-		if i, ok := byName[m]; ok {
-			memberIdx = append(memberIdx, i)
-		}
-	}
-	if len(memberIdx) != len(cfg.WeightMembers) {
-		memberIdx = nil
-	}
 	probRadius := func(m int) int {
 		if isLead[m] {
 			return nowcast.DefaultProbRadius(m)
@@ -84,10 +75,12 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		cur := w.grid(t)
 		lo, hi := cur.W/3, 2*cur.W/3 // central tile of the 3×3 mosaic
 		var points [][2]float64
+		var lat lattice
 		for y := lo; y < hi; y += cfg.Step {
 			for x := lo; x < hi; x += cfg.Step {
 				if reg.Coverage.At(x, y) {
 					points = append(points, [2]float64{float64(x), float64(y)})
+					lat.put((x-lo)/cfg.Step, (y-lo)/cfg.Step)
 				}
 			}
 		}
@@ -96,7 +89,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		}
 		rs.Last = t
 		rs.Points = max(rs.Points, len(points))
-		b := st.block(reg.Name, reg.Climate, t, nVar, len(cfg.Leads))
+		b := st.block(reg.Name, reg.Climate, t, nVar, len(cfg.Classes), len(cfg.Leads))
 		b.Issues++
 		hh := st.Hist[half(t)]
 
@@ -128,43 +121,48 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 
 		fc := make([]forecast, nVar)
 		base := nowcast.Options{Horizon: horizon, Threshold: cfg.Threshold, Radius: cfg.Radius, ProbRadius: probRadius}
-		run := func(v int, field func() nowcastField, trend bool) {
+		// run forecasts with variant v's motion and upgrades; persistence is
+		// the zero Variant, which has no motion.
+		run := func(i int, v Variant) {
 			start := time.Now()
 			f := newForecast(len(cfg.Leads), len(points))
 			opt := base
-			fld := field()
-			if trend && fld.field != nil {
-				opt.Trend = w.trend(t, fld.field)
+			var field *motion.Field
+			if v.Method != "" {
+				field = w.field(v.Method, t, v.Pairs)
+			}
+			if field != nil && v.Trend {
+				opt.Trend = w.trend(t, v.Method, v.Pairs)
 				opt.TrendTau = cfg.TrendTau
 			}
 			for pi, p := range points {
-				res := nowcast.Forecast(cur.Grid, fld.field, p[0], p[1], opt)
+				res := nowcast.Forecast(cur.Grid, field, p[0], p[1], opt)
 				for li, l := range cfg.Leads {
 					f.dbz[li][pi] = res.At(l)
 					f.prob[li][pi] = res.ProbAt(l)
 				}
 			}
-			fc[v] = f
-			b.Nanos[v] += int64(time.Since(start))
+			fc[i] = f
+			b.Nanos[i] += int64(time.Since(start))
 		}
 		// Persistence: the echo now, everywhere in the future.
-		run(0, func() nowcastField { return nowcastField{} }, false)
+		run(0, Variant{})
 		for vi, v := range cfg.Variants {
 			i := vi + 1
 			switch v.Method {
-			case MethodMean, MethodVote:
+			case MethodMean:
 				start := time.Now()
-				fc[i] = combine(fc, v, byName, cfg.Threshold, len(cfg.Leads), len(points))
-				b.Nanos[i] += int64(time.Since(start))
-			case MethodWeighted:
-				start := time.Now()
-				fc[i] = combineWeighted(fc, v, byName, reg.Name, cfg.Weights, len(cfg.Leads), len(points))
+				fc[i] = combine(fc, v, byName, len(cfg.Leads), len(points))
 				b.Nanos[i] += int64(time.Since(start))
 			default:
-				run(i, func() nowcastField { return nowcastField{w.field(v.Method, t, v.Pairs)} }, v.Trend)
+				run(i, v)
 			}
 		}
 
+		addAccum(b.Acc, fc, obs, cfg.Leads)
+		if len(cfg.FSSThresholds) > 0 && len(cfg.FSSWindows) > 0 {
+			addFSS(b.fssAccs(nVar, len(cfg.FSSThresholds), len(cfg.FSSWindows), len(cfg.Leads)), fc, obs, &lat, cfg)
+		}
 		for v := range nVar {
 			for li := range cfg.Leads {
 				a := &b.Acc[v][li]
@@ -181,6 +179,9 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 						a.F++
 					default:
 						a.C++
+					}
+					for k, c := range cfg.Classes {
+						b.Cls[v][k][li].score(c.in(pred), c.in(o))
 					}
 					if pr || or {
 						a.AbsErr += math.Abs(math.Max(float64(pred), 0) - math.Max(float64(o), 0))
@@ -206,9 +207,6 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		if corrIdx >= 0 {
 			addCorr(&st.Corr, fc, obs[corrIdx], corrIdx, cfg.Threshold)
 		}
-		if len(memberIdx) > 0 {
-			addMemberStats(st.WStats.region(reg.Name), fc, memberIdx, obs, cfg.Threshold)
-		}
 	}
 	for t, r := range w.rainy {
 		rs.Rainy[t] = r
@@ -217,12 +215,30 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 	return st, nil
 }
 
-// nowcastField wraps a possibly nil field (persistence has none).
-type nowcastField struct{ field *motion.Field }
+// addAccum scores the rain each variant accumulates up to every lead
+// against what radar showed, each lead standing for the minutes since the
+// one before.
+func addAccum(acc [][]leadAcc, fc []forecast, obs [][]float32, leads []int) {
+	for v := range fc {
+		for p := range obs[0] {
+			var pred, seen float64
+			prev := 0
+			for li, l := range leads {
+				h := float64(l-prev) / 60
+				prev = l
+				pred += radar.RainRate(fc[v].dbz[li][p]) * h
+				seen += radar.RainRate(obs[li][p]) * h
+				if pred > 0 || seen > 0 {
+					acc[v][li].AccumErr += math.Abs(pred - seen)
+					acc[v][li].NAccum++
+				}
+			}
+		}
+	}
+}
 
-// combine averages the members' forecasts (MethodMean), or turns their
-// rain/no-rain answers into a probability (MethodVote, with the mean dBZ).
-func combine(fc []forecast, v Variant, byName map[string]int, thr float32, nLead, nPoint int) forecast {
+// combine averages the members' dBZ and rain probability (MethodMean).
+func combine(fc []forecast, v Variant, byName map[string]int, nLead, nPoint int) forecast {
 	out := newForecast(nLead, nPoint)
 	n := float32(len(v.Members))
 	for _, m := range v.Members {
@@ -230,86 +246,11 @@ func combine(fc []forecast, v Variant, byName map[string]int, thr float32, nLead
 		for l := range nLead {
 			for p := range nPoint {
 				out.dbz[l][p] += f.dbz[l][p] / n
-				if v.Method == MethodVote {
-					if f.dbz[l][p] >= thr {
-						out.prob[l][p] += 1 / n
-					}
-				} else {
-					out.prob[l][p] += f.prob[l][p] / n
-				}
+				out.prob[l][p] += f.prob[l][p] / n
 			}
 		}
 	}
 	return out
-}
-
-// combineWeighted mixes the members' forecasts with the weights learned for
-// the region's fold at each lead.
-func combineWeighted(fc []forecast, v Variant, byName map[string]int, region string, w *Weights, nLead, nPoint int) forecast {
-	out := newForecast(nLead, nPoint)
-	for l := range nLead {
-		ws := w.For(region, v.Weighting, l, len(v.Members))
-		if v.Weighting == WeightEqual || len(ws) != len(v.Members) {
-			ws = equal(len(v.Members))
-		}
-		for mi, m := range v.Members {
-			f := fc[byName[m]]
-			wt := float32(ws[mi])
-			for p := range nPoint {
-				out.dbz[l][p] += wt * f.dbz[l][p]
-				out.prob[l][p] += wt * f.prob[l][p]
-			}
-		}
-	}
-	return out
-}
-
-// addMemberStats accumulates what weights are learned from: each member's
-// and persistence's hits, misses and false alarms, and the least-squares
-// sums of observed on forecast dBZ.
-func addMemberStats(ms []*memberStats, fc []forecast, idx []int, obs [][]float32, thr float32) {
-	x := make([]float64, len(idx))
-	for l, s := range ms {
-		for p, o := range obs[l] {
-			or := o >= thr
-			count := func(k int, pred float32) {
-				pr := pred >= thr
-				switch {
-				case pr && or:
-					s.H[k]++
-				case or:
-					s.M[k]++
-				case pr:
-					s.F[k]++
-				}
-			}
-			for k, v := range idx {
-				count(k, fc[v].dbz[l][p])
-				x[k] = math.Max(float64(fc[v].dbz[l][p]), 0)
-			}
-			count(len(idx), fc[0].dbz[l][p])
-			// Only samples with rain somewhere teach the regression anything.
-			y := math.Max(float64(o), 0)
-			if y == 0 && slicesMax(x) == 0 {
-				continue
-			}
-			for i := range x {
-				for j := range x {
-					s.XtX[i][j] += x[i] * x[j]
-				}
-				s.Xty[i] += x[i] * y
-			}
-			s.N++
-		}
-	}
-}
-
-func slicesMax(s []float64) float64 {
-	m := math.Inf(-1)
-	for _, v := range s {
-		m = math.Max(m, v)
-	}
-	return m
 }
 
 // addCorr accumulates dBZ errors at one lead where the observation or any

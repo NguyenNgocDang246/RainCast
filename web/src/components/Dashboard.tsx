@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { fetchForecast, reverse, type Forecast, type Place } from "@/lib/api";
-import { errorText, useLocale } from "@/lib/i18n";
+import { pollFrames, type FrameInfo } from "@/lib/framePoll";
+import { useLocale, userError } from "@/lib/i18n";
 import { addRecent } from "@/lib/recent";
 import { ForecastCard } from "./ForecastCard";
 import { Intro } from "./Intro";
@@ -10,8 +11,10 @@ import { LanguageSwitch } from "./LanguageSwitch";
 import { LocationMap } from "./LocationMap";
 import { LocationSearch } from "./LocationSearch";
 
-const REFRESH_MS = 60_000;
 const STORAGE_KEY = "raincast.place";
+const LOCATE_DEADLINE_MS = 30_000;
+/** A problem shown in the sheet: raised above the forecast's backdrop, which spills past the card. */
+const NOTICE = "relative z-10 text-sm text-amber-300";
 
 // The chosen place lives in localStorage, read through useSyncExternalStore
 // so the prerendered HTML (no storage) and the client agree on first render.
@@ -74,26 +77,42 @@ export function Dashboard() {
     if (lat === undefined || lon === undefined) return;
     const k = `${lat},${lon}`;
     let cancelled = false;
-    const load = async () => {
+    // A forecast only changes with a new radar frame, so it is fetched when one is due.
+    const stop = pollFrames(async () => {
+      let frame: FrameInfo | null = null;
       try {
         const f = await fetchForecast({ lat, lon });
-        if (cancelled) return;
+        if (cancelled) return null;
         setResult({ key: k, forecast: f, error: null });
+        frame = { time: f.frame_time, next_due: f.next_due };
       } catch (e) {
-        if (cancelled) return;
+        if (cancelled) return null;
         const msg = e instanceof Error ? e.message : String(e);
+        // Visitors see a plain line (userError); the details stay here.
+        console.warn("forecast:", msg);
         // A failed refresh keeps the last good forecast for this point.
         setResult((r) => ({ key: k, forecast: r?.key === k ? r.forecast : null, error: msg }));
       }
-      if (!cancelled) setNow(Date.now());
-    };
-    load();
-    const id = setInterval(load, REFRESH_MS);
+      setNow(Date.now());
+      return frame;
+    });
     return () => {
       cancelled = true;
-      clearInterval(id);
+      stop();
     };
   }, [lat, lon]);
+
+  // The forecast is read as of now (ForecastCard), so the clock moves on
+  // each minute, on the minute, between fetches.
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = () => {
+      setNow(Date.now());
+      timer = setTimeout(tick, 60_000 - (Date.now() % 60_000));
+    };
+    timer = setTimeout(tick, 60_000 - (Date.now() % 60_000));
+    return () => clearTimeout(timer);
+  }, []);
 
   // Only a result fetched for the current point is shown, so moving the point
   // (from any source, including another tab) shows loading instead of the old
@@ -103,10 +122,33 @@ export function Dashboard() {
   const error = current?.error ?? null;
 
   const [locating, setLocating] = useState(false);
-  const [locateError, setLocateError] = useState<string | null>(null);
+  /** Which locate problem to show, translated as it renders so it follows the language. */
+  const [locateError, setLocateError] = useState<"failed" | "insecure" | "denied" | null>(null);
+  /** The running locate attempt: its position watch and its deadline. */
+  const locateRun = useRef<{ watch: number; deadline: ReturnType<typeof setTimeout> } | null>(null);
 
-  /** Choosing any place clears a failed locate attempt. */
+  const stopLocating = () => {
+    const run = locateRun.current;
+    if (!run) return;
+    navigator.geolocation.clearWatch(run.watch);
+    clearTimeout(run.deadline);
+    locateRun.current = null;
+    setLocating(false);
+  };
+
+  useEffect(
+    () => () => {
+      const run = locateRun.current;
+      if (!run) return;
+      navigator.geolocation.clearWatch(run.watch);
+      clearTimeout(run.deadline);
+    },
+    [],
+  );
+
+  /** Choosing any place clears a failed locate attempt and drops a running one. */
   const select = (p: Place | null) => {
+    stopLocating();
     setLocateError(null);
     savePlace(p);
   };
@@ -141,27 +183,37 @@ export function Dashboard() {
   /** Uses the browser's position like a point picked on the map. */
   const locate = () => {
     if (!("geolocation" in navigator)) {
-      setLocateError(t.locate.failed);
+      setLocateError("failed");
       return;
     }
     // Browsers only share the position with https pages (and localhost).
     if (!window.isSecureContext) {
-      setLocateError(t.locate.insecure);
+      setLocateError("insecure");
       return;
     }
+    stopLocating();
     setLocating(true);
     setLocateError(null);
-    navigator.geolocation.getCurrentPosition(
+    // A coarse (network) position is enough for a radar cell and comes at
+    // once; asking for GPS made a cold device time out. The watch rides out
+    // transient errors until the first fix or our own deadline.
+    const watch = navigator.geolocation.watchPosition(
       (pos) => {
-        setLocating(false);
+        stopLocating();
         pickOnMap(pos.coords.latitude, pos.coords.longitude);
       },
       (err) => {
-        setLocating(false);
-        setLocateError(err.code === err.PERMISSION_DENIED ? t.locate.denied : t.locate.failed);
+        if (err.code !== err.PERMISSION_DENIED) return;
+        stopLocating();
+        setLocateError("denied");
       },
-      { enableHighAccuracy: true, timeout: 15_000, maximumAge: 60_000 },
+      { enableHighAccuracy: false, maximumAge: 10 * 60_000 },
     );
+    const deadline = setTimeout(() => {
+      stopLocating();
+      setLocateError("failed");
+    }, LOCATE_DEADLINE_MS);
+    locateRun.current = { watch, deadline };
   };
 
   // Google Maps layout: the map fills the screen above a thin footer; search
@@ -184,7 +236,7 @@ export function Dashboard() {
           </div>
 
           <section className="pointer-events-auto max-h-[45dvh] overflow-y-auto rounded-2xl border border-slate-800 bg-slate-950/95 p-5 shadow-2xl shadow-black/40 backdrop-blur sm:max-h-none sm:min-h-0">
-            {locateError && <p className="mb-4 text-sm text-amber-300">{locateError}</p>}
+            {locateError && <p className={`${NOTICE} mb-6`}>{t.locate[locateError]}</p>}
             {place === null && <Intro onLocate={locate} locating={locating} />}
             {place && forecast && <ForecastCard forecast={forecast} now={now} />}
             {place && !forecast && !error && (
@@ -192,7 +244,8 @@ export function Dashboard() {
                 {t.dashboard.loading}
               </p>
             )}
-            {place && error && <p className="text-sm text-amber-300">{errorText(t, error)}</p>}
+            {/* A failed refresh under the last good forecast stays clear of its backdrop. */}
+            {place && error && <p className={`${NOTICE} ${forecast ? "mt-6" : ""}`}>{userError(t, error)}</p>}
           </section>
         </div>
       </div>

@@ -2,9 +2,9 @@
 
 import { useEffect, useId, useState } from "react";
 import { geocode, suggest, type Place } from "@/lib/api";
-import { errorText, useLocale } from "@/lib/i18n";
+import { useLocale, userError } from "@/lib/i18n";
 import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
-import { LocateIcon } from "./icons";
+import { LocateIcon, SearchIcon } from "./icons";
 
 type Props = {
   onSelect: (place: Place) => void;
@@ -43,7 +43,8 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(-1);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  /** A query nothing matched, or the backend's error; translated as it renders so it follows the language. */
+  const [error, setError] = useState<{ notFound: string } | { message: string } | null>(null);
   // Read on the client only; the list is hidden until focus, so the
   // prerendered markup matches.
   const [recent, setRecent] = useState<Place[]>(() =>
@@ -109,7 +110,7 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
       // The address providers only know OpenStreetMap; a Google Maps link
       // carries its own coordinates, so it works for places OSM lacks.
       if (found.length === 0)
-        setError(t.search.notFound(text));
+        setError({ notFound: text });
       else if (found.length === 1) choose(found[0]);
       else {
         setResults({ query: text, places: found });
@@ -117,7 +118,8 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
         setOpen(true);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      console.warn("search:", err);
+      setError({ message: err instanceof Error ? err.message : String(err) });
     } finally {
       setBusy(false);
     }
@@ -196,16 +198,20 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
         >
           <LocateIcon className={`size-5 ${locating ? "animate-spin" : ""}`} />
         </button>
+        {/* A magnifier on phones, where the row is narrow; words from sm up. */}
         <button
           type="submit"
           disabled={busy || !editing}
-          className="rounded-xl bg-sky-500 shadow-lg shadow-black/30 px-5 py-3 font-medium text-slate-950 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed"
+          title={t.search.submit}
+          aria-label={busy ? t.search.busy : t.search.submit}
+          className="grid w-12 shrink-0 place-items-center rounded-xl bg-sky-500 shadow-lg shadow-black/30 font-medium text-slate-950 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed sm:w-auto sm:px-5 sm:py-3"
         >
-          {busy ? t.search.busy : t.search.submit}
+          <SearchIcon className={`size-5 sm:hidden ${busy ? "animate-pulse" : ""}`} />
+          <span className="hidden sm:inline">{busy ? t.search.busy : t.search.submit}</span>
         </button>
       </form>
 
-      {error && <p className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-amber-300 shadow-lg">{errorText(t, error)}</p>}
+      {error && <p className="mt-2 rounded-lg bg-slate-900 px-3 py-2 text-sm text-amber-300 shadow-lg">{"notFound" in error ? t.search.notFound(error.notFound) : userError(t, error.message)}</p>}
 
       {showList && (
         <div className="absolute inset-x-0 top-full z-10 mt-2 overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-xl">

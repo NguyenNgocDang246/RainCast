@@ -43,3 +43,52 @@ func TestMotionBeatsPersistenceOnMovingRain(t *testing.T) {
 		t.Fatalf("model CSI = %.2f on perfectly steady motion", *model.CSI)
 	}
 }
+
+func TestClimateGroupsCarryClasses(t *testing.T) {
+	var frames []Frame
+	for i := range 12 {
+		frames = append(frames, Frame{Time: int64(600 * (i + 1)), Mosaic: moving(i, 6)})
+	}
+	rep := Run(frames, Config{
+		Variants:  []Variant{{Name: "m2", Pairs: 2}},
+		Leads:     []int{10, 20, 30},
+		Threshold: 20, Radius: 0, Step: 4, StepSec: 600,
+		Classes: []Class{{Name: "≥ 20", Lo: 20}},
+	})
+	if len(rep.Groups) == 0 {
+		t.Fatalf("no climate groups")
+	}
+	for _, g := range rep.Groups {
+		for _, r := range g.Results {
+			if len(r.Classes) != 1 {
+				t.Fatalf("group %q result %q has %d classes, want 1", g.Climate, r.Name, len(r.Classes))
+			}
+		}
+	}
+}
+
+func TestMeanCSI(t *testing.T) {
+	vals := []float64{0.6, 0.4, 0.2}
+	csi := func(i int) *float64 { return &vals[i] }
+	leads := []int{10, 20, 30}
+	if m := meanCSI(leads, csi, 30); m == nil || math.Abs(*m-0.4) > 1e-9 {
+		t.Fatalf("meanCSI to 30 = %v, want 0.4", m)
+	}
+	if m := meanCSI(leads, csi, 20); m == nil || math.Abs(*m-0.5) > 1e-9 {
+		t.Fatalf("meanCSI to 20 = %v, want 0.5", m)
+	}
+	if m := meanCSI(leads, csi, 60); m != nil {
+		t.Fatalf("meanCSI past the last lead = %v, want nil", *m)
+	}
+}
+
+func TestPaperClassesAreThresholds(t *testing.T) {
+	for _, c := range PaperClasses() {
+		if c.Hi != 0 {
+			t.Errorf("%s has an upper bound", c.Name)
+		}
+	}
+	if c := PaperClasses()[0]; math.Abs(radar.RainRate(c.Lo)-1) > 1e-3 {
+		t.Errorf("%s: %.2f dBZ is %.3f mm/h, want 1", c.Name, c.Lo, radar.RainRate(c.Lo))
+	}
+}

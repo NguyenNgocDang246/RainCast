@@ -64,7 +64,7 @@ func TestEveryMethodBeatsPersistenceOnSteadyStorms(t *testing.T) {
 // give exactly the totals of one run over everything.
 func TestIncrementalEqualsFresh(t *testing.T) {
 	cfg := testConfig()
-	cfg.Variants = cfg.Variants[:4] // TREC sweep: fast and enough here
+	cfg.Variants = cfg.Variants[:2] // TREC and HS: fast and enough here
 	all := stormFrames(16)
 	fresh := Run(all, cfg)
 
@@ -94,13 +94,9 @@ func TestCombine(t *testing.T) {
 	a.prob[0][0], b.prob[0][0] = 0.8, 0.2
 	fc := []forecast{{}, a, b}
 	byName := map[string]int{"a": 1, "b": 2}
-	mean := combine(fc, Variant{Method: MethodMean, Members: []string{"a", "b"}}, byName, 20, 1, 2)
+	mean := combine(fc, Variant{Method: MethodMean, Members: []string{"a", "b"}}, byName, 1, 2)
 	if mean.dbz[0][0] != 20 || math.Abs(float64(mean.prob[0][0])-0.5) > 1e-6 {
 		t.Errorf("mean = %v dBZ, %v", mean.dbz[0][0], mean.prob[0][0])
-	}
-	vote := combine(fc, Variant{Method: MethodVote, Members: []string{"a", "b"}}, byName, 20, 1, 2)
-	if vote.prob[0][0] != 0.5 || vote.prob[0][1] != 0 {
-		t.Errorf("vote = %v", vote.prob[0])
 	}
 }
 
@@ -164,22 +160,55 @@ func TestBootstrapIntervals(t *testing.T) {
 	cfg := testConfig()
 	cfg.Variants = cfg.Variants[:3]
 	st := NewState(cfg)
-	// Twelve blocks: the reference always hits; variant 1 misses a third.
+	// Twelve blocks: the reference always hits; variant 2 misses a third.
 	for i := range 12 {
-		b := st.block("r", "tropical", int64(i)*blockSec, 4, len(cfg.Leads))
+		b := st.block("r", "tropical", int64(i)*blockSec, 4, len(cfg.Classes), len(cfg.Leads))
 		b.Issues = 1
 		for v := range 4 {
 			b.Acc[v][0] = leadAcc{H: 10, M: 0, F: 0}
 		}
-		b.Acc[1][0] = leadAcc{H: 6, M: 3}
+		b.Acc[2][0] = leadAcc{H: 6, M: 3}
 	}
 	rep := st.report(cfg)
-	ref := rep.Results[3] // TREC 4 cặp
+	ref := rep.Results[1] // TREC 4 cặp
 	if ref.Name != cfg.Reference {
-		t.Fatalf("row 3 is %s", ref.Name)
+		t.Fatalf("row 1 is %s", ref.Name)
 	}
-	r := rep.Results[1]
+	r := rep.Results[2]
 	if r.DeltaCSICI == nil || r.DeltaCSICI[1] >= 0 {
 		t.Fatalf("a variant always worse should have an interval below 0: %+v", r.DeltaCSICI)
+	}
+}
+
+func TestClassScores(t *testing.T) {
+	if !(Class{Lo: 20, Hi: 30}).in(25) || (Class{Lo: 20, Hi: 30}).in(30) || !(Class{Lo: 50}).in(65) {
+		t.Fatal("class bounds")
+	}
+	cfg := testConfig()
+	cfg.Variants = cfg.Variants[:3]
+	cfg.Classes = []Class{{Name: "light", Lo: 20, Hi: 30}, {Name: "heavy", Lo: 40}}
+	st := NewState(cfg)
+	// The reference catches light rain but calls heavy rain light; variant
+	// 2 gets both.
+	for i := range 12 {
+		b := st.block("r", "tropical", int64(i)*blockSec, 4, len(cfg.Classes), len(cfg.Leads))
+		b.Issues = 1
+		for v := range 4 {
+			b.Cls[v][0][0] = classAcc{H: 10}
+			b.Cls[v][1][0] = classAcc{M: 5}
+		}
+		b.Cls[2][1][0] = classAcc{H: 5}
+	}
+	rep := st.report(cfg)
+	heavy := func(r Result) ClassScore { return r.Classes[1] }
+	if c := heavy(rep.Results[1]); *c.Overall.CSI != 0 || c.Observed != 60 {
+		t.Fatalf("reference on heavy rain: %+v", c.Overall)
+	}
+	c := heavy(rep.Results[2])
+	if *c.Overall.CSI != 1 || c.DeltaCSI == nil || *c.DeltaCSI != 1 || c.DeltaCSICI[0] <= 0 {
+		t.Fatalf("variant 2 on heavy rain: CSI %v, delta %v %v", c.Overall.CSI, c.DeltaCSI, c.DeltaCSICI)
+	}
+	if l := rep.Results[2].Classes[0]; *l.Overall.CSI != 1 || l.Class != "light" {
+		t.Fatalf("light rain: %+v", l)
 	}
 }

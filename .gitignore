@@ -3,3 +3,4 @@ data/
 *.log
 .playwright-mcp/
 .env
+/geoip/

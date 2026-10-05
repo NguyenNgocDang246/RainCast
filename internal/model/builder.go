@@ -1,5 +1,5 @@
 // Package model holds RainCast's forecast models: the ways of estimating
-// how rain moves (block matching, optical flow, cell tracking) and the
+// how rain moves (block matching and optical flow) and the
 // ensembles that combine them. The app forecasts with Default(); the
 // backtest scores every method so the default can be chosen again as data
 // accumulates.
@@ -17,20 +17,13 @@ import (
 // Methods of estimating motion. Each yields a motion field that the
 // semi-Lagrangian nowcast extrapolates along.
 const (
-	TREC     = "trec"      // block matching by cross-correlation
-	COTREC   = "cotrec"    // TREC with divergence removed
-	HS       = "hs"        // Horn–Schunck optical flow
-	LK       = "lk"        // pyramidal Lucas–Kanade optical flow
-	CellNN   = "cell-nn"   // cell tracking, nearest-neighbor matching
-	CellHung = "cell-hung" // cell tracking, Hungarian matching + Kalman
-	Hybrid   = "hybrid"    // TREC with tracked cells moving on their own
+	TREC = "trec" // block matching by cross-correlation
+	HS   = "hs"   // Horn–Schunck optical flow
+	LK   = "lk"   // pyramidal Lucas–Kanade optical flow
 )
 
 // Methods lists every motion method.
-var Methods = []string{TREC, COTREC, HS, LK, CellNN, CellHung, Hybrid}
-
-// cotrecIters solves the COTREC potential on the block grid.
-const cotrecIters = 200
+var Methods = []string{TREC, HS, LK}
 
 // Cache keeps per-pair motion fields between calls, so a frame pair is
 // estimated once per method however many forecasts use it. It is safe for
@@ -190,31 +183,26 @@ func (b *Builder) Field(method string, t int64, pairs int) (*motion.Field, int) 
 			weights[k] = float64(pairs - k)
 		}
 		return motion.WeightedAverage(fields, weights), n + 1
-	case COTREC:
-		f, used := b.Field(TREC, t, pairs)
-		return f.Cotrec(cotrecIters), used
-	case CellNN, CellHung, Hybrid:
-		frames := make([]*radar.Grid, n+1)
-		trec := make([]*motion.Field, n)
-		for k := range n + 1 {
-			frames[k] = b.Grid(times[n-k]) // oldest first
-		}
-		for k := range n {
-			trec[k] = b.pair(TREC, times[n-1-k])
-		}
-		match := cell.MatchHungarian
-		if method == CellNN {
-			match = cell.MatchNearest
-		}
-		opt := cell.DefaultOptions(match)
-		minutes := float64(times[0]-times[1]) / 60
-		if method == Hybrid {
-			base, _ := b.Field(TREC, t, pairs)
-			return cell.Hybrid(frames, trec, base, minutes, opt), n + 1
-		}
-		return cell.Field(frames, trec, minutes, opt), n + 1
 	}
 	panic("model: unknown method " + method)
+}
+
+// Storms follows the convective cells of frame t back through up to pairs
+// earlier frames along field.
+func (b *Builder) Storms(t int64, field *motion.Field, pairs int) []cell.Storm {
+	if field == nil {
+		return nil
+	}
+	times := b.chain(t, pairs)
+	if len(times) < 2 {
+		return nil
+	}
+	frames := make([]*radar.Grid, len(times))
+	for k, ft := range times {
+		frames[len(times)-1-k] = b.Grid(ft) // oldest first
+	}
+	minutes := float64(times[0]-times[1]) / 60
+	return cell.Lifecycle(frames, field, minutes, cell.DefaultOptions(cell.MatchHungarian))
 }
 
 // Trend is the intensity growth along field at frame t, measured over two

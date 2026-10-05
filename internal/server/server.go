@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"net/http"
@@ -34,6 +35,8 @@ type Source interface {
 	ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte) (*pipeline.Snapshot, error)
 	Status() pipeline.Status
 	Radar() (pipeline.RadarFrame, bool)
+	// NextDue is when the radar frame after the one at t is expected.
+	NextDue(t time.Time) time.Time
 }
 
 // Geocoder turns an address, coordinates or a map link into places, names
@@ -275,8 +278,21 @@ func (s *Server) radar(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "radar data is still loading; try again shortly")
 		return
 	}
-	w.Header().Set("Cache-Control", "public, max-age=60, s-maxage=60, stale-while-revalidate=60")
+	age := radarMaxAge(f.NextDue, time.Now())
+	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, s-maxage=%d, stale-while-revalidate=%d", age, age, age))
 	writeJSON(w, http.StatusOK, f)
+}
+
+// radarMaxAge is how many seconds a radar answer may be cached: up to a
+// minute, but not past when the next frame is due, and only briefly once it
+// is.
+func radarMaxAge(due, now time.Time) int {
+	const overdue, most = 15, 60
+	until := int(due.Sub(now) / time.Second)
+	if until <= 0 {
+		return overdue
+	}
+	return min(until, most)
 }
 
 func (s *Server) fail(w http.ResponseWriter, err error) {

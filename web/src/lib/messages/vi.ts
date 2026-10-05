@@ -22,8 +22,16 @@ export const vi = {
     "link has no location": "Link này không chứa vị trí. Hãy mở địa điểm trong Google Maps rồi chia sẻ lại.",
     "address lookup failed": "Không tra được địa chỉ, thử lại sau ít giây.",
     "radar data is still loading; try again shortly": "Đang tải dữ liệu radar, thử lại sau ít giây.",
-    "could not load radar data for this location": "Không tải được radar cho vị trí này.",
+    "could not load radar data for this location": "Không tải được radar cho vị trí này, thử lại sau ít phút.",
+    "q is too long (max 500 characters)": "Nội dung tìm quá dài, hãy rút gọn lại.",
+    "network error": "Không kết nối được máy chủ. Kiểm tra mạng rồi thử lại.",
   } as Record<string, string>,
+
+  /** What visitors see for errors without a message of their own (userError). */
+  problem: {
+    busy: "Máy chủ đang bận, thử lại sau ít giây.",
+    generic: "Có lỗi xảy ra, thử lại sau ít phút.",
+  },
 
   dashboard: {
     loading: "Đang xem radar…",
@@ -38,6 +46,8 @@ export const vi = {
 
   map: {
     label: "Bản đồ chọn vị trí",
+    legend: "Mưa",
+    levels: { veryHeavy: "Rất to", heavy: "To", moderate: "Vừa", light: "Nhẹ" },
   },
 
   locate: {
@@ -61,33 +71,40 @@ export const vi = {
 
   forecast: {
     radarAt: (clock: string) => `Radar lúc ${clock}`,
+    accum: (mm: string) => `Lượng mưa ước tính khoảng ${mm} mm/h`,
+    storms: (n: number) =>
+      `${n === 1 ? "Một khối dông" : `${n} khối dông`} đang hình thành hoặc mạnh lên trong vòng 15 km — dông mới có thể xuất hiện mà radar chưa kịp thấy hướng đi.`,
     moving: (dir: string, kmh: string) => ` · mưa đang di chuyển về hướng ${dir}, ${kmh} km/h`,
+    stationary: " · mưa gần như đứng yên",
     about: (clock: string) => `Khoảng ${clock}`,
 
+    // Status: the weather now.
     heavyNow: "Đang mưa to",
-    heavyContinues: "Mưa to còn kéo dài",
-    easingNow: "Đang dịu bớt",
-    easingIn: "Dịu bớt sau",
-    noEasing: "Chưa thấy dấu hiệu ngớt trong 60 phút tới",
-
+    rainNow: "Đang mưa",
     maybeLightNow: "Có thể đang mưa nhẹ",
-    lightNow: "Đang mưa nhẹ",
+    dryNow: "Hiện không mưa",
+
+    // Headline: what comes next.
+    heavyContinues: "Mưa to còn kéo dài",
+    easingSoon: "Sắp dịu bớt",
+    easingIn: "Dịu bớt sau",
     heavySoon: "Sắp mưa to",
     heavyIn: "Mưa to sau",
-    noHeavy: "Chưa có mưa to",
-    lightLasts: "Mưa nhẹ có thể kéo dài hơn 60 phút",
-    mayStop: (clock: string) => `Có thể tạnh khoảng ${clock}`,
-
-    maybeSoon: "Có thể sắp mưa",
-    maybeIn: "Có thể mưa sau",
-    drizzle: (clock: string) => `Khoảng ${clock}, mưa rất nhẹ hoặc lất phất`,
+    rainLasts: "Mưa còn kéo dài",
+    stopSoon: "Sắp tạnh",
+    stopIn: "Có thể tạnh sau",
     soon: "Sắp mưa",
     rainIn: "Mưa sau",
+    maybeSoon: "Có thể sắp mưa nhẹ",
+    maybeIn: "Có thể mưa nhẹ sau",
+    noRain: (n: number) => `Không mưa trong ${n} phút tới`,
+
+    // Detail: when, and how much.
+    noEasing: (n: number) => `Chưa thấy dấu hiệu ngớt trong ${n} phút tới`,
+    noStop: (n: number) => `Chưa thấy dấu hiệu tạnh trong ${n} phút tới`,
+    drizzle: (clock: string) => `Khoảng ${clock}, mưa rất nhẹ hoặc lất phất`,
     heavyAfter: (n: number, clock: string) => `Mưa to sau khoảng ${n} phút (${clock})`,
     moderate: (clock: string) => `Khoảng ${clock}, mưa vừa`,
-
-    dry: "Trời tạm ổn",
-    noRain: "Không mưa trong 60 phút tới",
     noRainDetail: "Radar chưa thấy cơn mưa nào đang tiến về chỗ bạn",
   },
 
@@ -152,6 +169,24 @@ export const vi = {
       fewEvents: (need: number) =>
         `Chưa đủ ${need} đợt mưa: chênh lệch giữa các cấu hình lúc này có thể chỉ là nhiễu.`,
       groups: "Theo nhóm khí hậu",
+      classes: "Theo loại mưa",
+      classesNote:
+        "CSI tổng của từng loại mưa và Δ so với TREC 4 cặp. Với khoảng (nhẹ, vừa, to) phải dự báo đúng khoảng mới tính là trúng; với ngưỡng (từ … trở lên) chỉ cần đạt tới ngưỡng. Chấm từng điểm, lệch vị trí là trượt. Loại có ít mẫu quan sát thì điểm dao động nhiều.",
+      classLabel: (lo: number, hi?: number): string | undefined => vi.admin.backtest.classNames[`${lo}-${hi ?? ""}`],
+      classNames: {
+        "20-30": "Mưa nhẹ",
+        "30-40": "Mưa vừa",
+        "40-50": "Mưa to",
+        "50-": "Mưa rất to",
+        "30-": "Từ mưa vừa trở lên",
+        "40-": "Từ mưa to trở lên",
+      } as Record<string, string>,
+      fss: "Cho phép lệch vị trí (FSS)",
+      fssNote:
+        "Fractions skill score: so tỉ lệ diện tích có mưa trong một ô vuông quanh mỗi điểm, nên dự báo lệch vài km vẫn được điểm. 1 là hoàn hảo, 0 là không có kỹ năng; số nhỏ là chênh lệch so với TREC 4 cặp (điểm %). Ô ~10 km gần như chấm từng điểm.",
+      fssThreshold: (dbz: number) => `≥ ${dbz} dBZ`,
+      fssWindow: (km: number) => `~${Math.round(km)} km`,
+      observed: (n: number) => `${n.toLocaleString("vi")} mẫu`,
       group: "Nhóm",
       regionsCol: "Vùng",
       eventsCol: "Đợt mưa",
@@ -165,14 +200,9 @@ export const vi = {
       variant: (pairs: number, trend: boolean) => `${pairs} cặp${trend ? " + xu hướng" : ""}`,
       methods: {
         trec: "TREC",
-        cotrec: "COTREC",
         hs: "Horn–Schunck",
         lk: "Lucas–Kanade",
-        "cell-nn": "Cell NN",
-        "cell-hung": "Cell Hungarian",
-        hybrid: "Hybrid",
         ensemble: "Ensemble trung bình",
-        vote: "Ensemble bỏ phiếu",
       } as Record<string, string>,
       pairsSuffix: (pairs: number) => ` ${pairs} cặp`,
       trendSuffix: " + xu hướng",
@@ -180,11 +210,12 @@ export const vi = {
       delta: "Δ so với TREC 4 cặp",
       bss: "BSS",
       auc: "AUC",
+      accum: "mm/giờ ±",
       ms: "ms/lần",
       better: "chắc chắn tốt hơn",
       worse: "chắc chắn kém hơn",
       intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
-      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
+      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
     },
 
     history: {
@@ -213,6 +244,9 @@ export const vi = {
       motion: "Chuyển động",
       motionValue: (kmh: string, dir: string, deg: string) => `${kmh} km/h về ${dir} (${deg}°)`,
       noMotion: "không đủ dữ liệu",
+      coherence: "Độ đồng hướng",
+      gain: "Vector giải thích radar",
+      member: (method: string) => `Chuyển động ${method.toUpperCase()}`,
       threshold: "Ngưỡng",
       thresholdValue: (rain: number, heavy: number) => `mưa ≥ ${rain} dBZ · mưa to ≥ ${heavy} dBZ`,
       minuteFromFrame: "Phút (từ khung)",

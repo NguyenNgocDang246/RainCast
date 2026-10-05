@@ -2,7 +2,6 @@ package backtest
 
 import (
 	"math"
-	"math/rand/v2"
 	"slices"
 	"sort"
 
@@ -68,9 +67,16 @@ func results(cfg Config, acc [][]leadAcc, nanos []int64, issues int) []Result {
 			a := acc[v][li]
 			all.add(a)
 			out[v].Leads = append(out[v].Leads, LeadScore{LeadMin: l, Scores: scores(a),
-				MAEdBZ: ratio(a.AbsErr, float64(a.NErr)), Brier: ratio(a.Brier, float64(a.NBrier))})
+				MAEdBZ: ratio(a.AbsErr, float64(a.NErr)), Brier: ratio(a.Brier, float64(a.NBrier)),
+				AccumMAE: ratio(a.AccumErr, float64(a.NAccum))})
+		}
+		if n := len(out[v].Leads); n > 0 {
+			out[v].AccumMAE = out[v].Leads[n-1].AccumMAE
 		}
 		out[v].Overall = scores(all)
+		csi := func(i int) *float64 { return out[v].Leads[i].Scores.CSI }
+		out[v].CSIMean60 = meanCSI(cfg.Leads, csi, 60)
+		out[v].CSIMean90 = meanCSI(cfg.Leads, csi, 90)
 		out[v].Brier = ratio(all.Brier, float64(all.NBrier))
 		if issues > 0 {
 			out[v].MsPerIssue = float64(nanos[v]) / 1e6 / float64(issues)
@@ -116,6 +122,8 @@ func (st *State) report(cfg Config) Report {
 	}
 
 	st.bootstrap(cfg, blocks, rep.Results)
+	classResults(cfg, blocks, rep.Results)
+	fssResults(cfg, blocks, rep.Results)
 
 	// Regions and climate groups.
 	byRegion := map[string][]*block{}
@@ -158,15 +166,12 @@ func (st *State) report(cfg Config) Report {
 	sort.Strings(climates)
 	for _, c := range climates {
 		ca, cn, ci := sum(byClimate[c], nVar, nLead)
+		gr := results(cfg, ca, cn, ci)
+		classResults(cfg, byClimate[c], gr)
 		rep.Groups = append(rep.Groups, Group{Climate: c, Regions: climateRegions[c], Issues: ci,
-			Events: climateEvents[c], Results: results(cfg, ca, cn, ci)})
+			Events: climateEvents[c], Results: gr})
 	}
 	rep.ErrCorr = st.errCorr(cfg)
-	if cfg.Weights != nil {
-		rep.WeightMembers = cfg.WeightMembers
-		rep.Weights = cfg.Weights.byFold
-		rep.WeightsLearned = cfg.Weights.Learned
-	}
 	return rep
 }
 
@@ -184,7 +189,6 @@ func (st *State) bootstrap(cfg Config, blocks []*block, res []Result) {
 		}
 	}
 	// Per block and variant: hits, misses, false alarms over all leads.
-	type hmf struct{ h, m, f float64 }
 	tot := make([][]hmf, len(blocks))
 	for bi, b := range blocks {
 		tot[bi] = make([]hmf, nVar)
@@ -196,33 +200,7 @@ func (st *State) bootstrap(cfg Config, blocks []*block, res []Result) {
 			}
 		}
 	}
-	csi := func(x hmf) float64 {
-		if d := x.h + x.m + x.f; d > 0 {
-			return x.h / d
-		}
-		return 0
-	}
-	r := rand.New(rand.NewPCG(1, 2))
-	samples := make([][]float64, nVar) // CSI per resample
-	deltas := make([][]float64, nVar)
-	sumv := make([]hmf, nVar)
-	for range resamples {
-		clear(sumv)
-		for range blocks {
-			b := tot[r.IntN(len(blocks))]
-			for v := range nVar {
-				sumv[v].h += b[v].h
-				sumv[v].m += b[v].m
-				sumv[v].f += b[v].f
-			}
-		}
-		refCSI := csi(sumv[ref])
-		for v := range nVar {
-			c := csi(sumv[v])
-			samples[v] = append(samples[v], c)
-			deltas[v] = append(deltas[v], c-refCSI)
-		}
-	}
+	samples, deltas := resampleCSI(tot, ref)
 	for v := range nVar {
 		ci := percentiles(samples[v])
 		res[v].CSICI = &ci

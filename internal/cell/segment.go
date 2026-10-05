@@ -1,7 +1,8 @@
 // Package cell tracks rain cells as objects (TITAN/SCIT style): it splits
-// each radar frame into cells, matches them between frames by nearest
-// neighbor or by an optimal (Hungarian) assignment, smooths each track with
-// a Kalman filter, and turns the tracked velocities into a motion.Field.
+// each radar frame into cells and follows them between frames, one to one
+// (Hungarian assignment with a Kalman-smoothed velocity) or by overlap,
+// which also sees cells form, split, merge and decay. A storm's life then
+// adjusts the intensity trend of whichever motion method moved it.
 package cell
 
 import "raincast/internal/radar"

@@ -104,6 +104,13 @@ type Snapshot struct {
 	KmPerPx     float64   `json:"km_per_px"`
 	Trend       bool      `json:"trend"` // intensity growth/decay applied
 	Model       string    `json:"model"` // forecast model name
+	// StormsNearby counts convective cells within stormRadiusKm that are
+	// forming or strengthening (0 when the model does not follow storms).
+	StormsNearby int `json:"storms_nearby"`
+	// NextDue is when the next radar frame is expected (Pipeline.NextDue),
+	// set as the snapshot is served: a newer forecast is not worth asking
+	// for before then.
+	NextDue time.Time `json:"next_due,omitzero"`
 	nowcast.Result
 
 	Mosaic *radar.Mosaic `json:"-"`
@@ -128,6 +135,7 @@ type Pipeline struct {
 	ticks    int
 	lastTick time.Time
 	lastErr  string
+	lags     lagTracker
 }
 
 // New builds a pipeline. cfg.Stations must not be empty.
@@ -187,6 +195,8 @@ type RadarFrame struct {
 	Time    time.Time `json:"time"`
 	TileURL string    `json:"tile_url"` // Leaflet {z}/{x}/{y} template
 	MaxZoom int       `json:"max_zoom"`
+	// NextDue is when the next frame is expected (Pipeline.NextDue).
+	NextDue time.Time `json:"next_due"`
 }
 
 // Radar returns the newest frame, the one forecasts start from; false
@@ -199,22 +209,48 @@ func (p *Pipeline) Radar() (RadarFrame, bool) {
 		return RadarFrame{}, false
 	}
 	f := p.frames[n-1]
+	t := time.Unix(f.Time, 0).UTC()
 	return RadarFrame{
-		Time:    time.Unix(f.Time, 0).UTC(),
+		Time:    t,
 		TileURL: rainviewer.MapTileTemplate(p.host, f.Path),
 		MaxZoom: rainviewer.MaxZoom,
+		NextDue: p.nextDue(t),
 	}, true
 }
 
+// overdueMaxAge is how old the frame index may get once the next frame is
+// due: it appears a few minutes after its time, and should show up soon
+// after.
+const overdueMaxAge = 30 * time.Second
+
+// overdue reports whether the frame after the newest one is due by now.
+// Callers hold p.mu.
+func (p *Pipeline) overdue(now time.Time) bool {
+	n := len(p.frames)
+	return n > 0 && !now.Before(p.nextDue(time.Unix(p.frames[n-1].Time, 0)))
+}
+
+// maxAge caps base at overdueMaxAge while the next frame is due. Callers
+// hold p.mu.
+func (p *Pipeline) maxAge(base time.Duration, now time.Time) time.Duration {
+	if p.overdue(now) {
+		return min(base, overdueMaxAge)
+	}
+	return base
+}
+
 // Run refreshes the frame index immediately and then every interval until
-// ctx is done.
+// ctx is done; every overdueMaxAge instead while the next frame is due.
 func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
-	t := time.NewTicker(interval)
-	defer t.Stop()
 	for {
 		p.refresh(ctx)
+		p.mu.RLock()
+		wait := p.maxAge(interval, time.Now())
+		p.mu.RUnlock()
+		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			t.Stop()
 			return
 		case <-t.C:
 		}
@@ -222,14 +258,16 @@ func (p *Pipeline) Run(ctx context.Context, interval time.Duration) {
 }
 
 // EnsureFresh reloads the frame index when it is older than
-// Config.IndexMaxAge (a no-op without one). Concurrent callers share one
-// reload, which outlives a caller that gives up.
+// Config.IndexMaxAge, or overdueMaxAge while the next frame is due (a no-op
+// without IndexMaxAge). Concurrent callers share one reload, which outlives
+// a caller that gives up.
 func (p *Pipeline) EnsureFresh(ctx context.Context) {
 	if p.cfg.IndexMaxAge <= 0 {
 		return
 	}
 	p.mu.RLock()
-	fresh := len(p.frames) >= 2 && time.Since(p.lastTick) < p.cfg.IndexMaxAge
+	now := time.Now()
+	fresh := len(p.frames) >= 2 && now.Sub(p.lastTick) < p.maxAge(p.cfg.IndexMaxAge, now)
 	p.mu.RUnlock()
 	if fresh {
 		return
@@ -258,8 +296,24 @@ func (p *Pipeline) refresh(ctx context.Context) {
 	}
 }
 
-// sharedIndexTTL is how long one process's frame index serves the others.
+// sharedIndexTTL is how long one process's frame index serves the others;
+// once the next frame is due, overdueMaxAge.
 const sharedIndexTTL = time.Minute
+
+// sharedIndexAge is how long an index whose next frame is due at due may
+// serve other processes from now.
+func sharedIndexAge(due, now time.Time) time.Duration {
+	return min(sharedIndexTTL, max(due.Sub(now), overdueMaxAge))
+}
+
+// newestFrame is the time of m's newest frame, 0 without frames.
+func newestFrame(m *rainviewer.Maps) int64 {
+	var newest int64
+	for _, f := range m.Radar.Past {
+		newest = max(newest, f.Time)
+	}
+	return newest
+}
 
 // Tick reloads the frame index, from the shared cache when another process
 // loaded it within the last minute. Radar tiles are only fetched when a
@@ -274,6 +328,7 @@ func (p *Pipeline) Tick(ctx context.Context) error {
 	if len(frames) == 0 {
 		return fmt.Errorf("pipeline: no radar frames")
 	}
+	p.observeLag(ctx, frames[len(frames)-1].Time, maps.Generated)
 	p.mu.Lock()
 	p.host, p.frames = maps.Host, frames
 	p.mu.Unlock()
@@ -299,7 +354,8 @@ func (p *Pipeline) loadMaps(ctx context.Context) (*rainviewer.Maps, error) {
 	}
 	if p.cfg.Shared != nil {
 		if data, err := json.Marshal(m); err == nil {
-			p.cfg.Shared.Set(ctx, key, data, sharedIndexTTL)
+			due := p.NextDue(time.Unix(newestFrame(m), 0))
+			p.cfg.Shared.Set(ctx, key, data, sharedIndexAge(due, time.Now()))
 		}
 	}
 	return m, nil
@@ -339,24 +395,28 @@ func (p *Pipeline) builder(history []rainviewer.Frame, grid func(int64) *radar.M
 	}
 }
 
+// stormRadiusKm is how far away a building storm is worth mentioning.
+const stormRadiusKm = 15
+
 // snapshot runs the model for (lat, lon) over a prepared region.
 func (p *Pipeline) snapshot(lat, lon float64, r *region) *Snapshot {
-	gx, gy := geo.LatLonToPixel(lat, lon, p.cfg.Zoom)
+	gx, gy := geo.LatLonToIndex(lat, lon, p.cfg.Zoom)
 	x, y := r.cur.Local(gx, gy)
 	opt := p.nowcastOptions(lat)
 	useTrend := p.cfg.Model.Trend && r.prep.HasTrend()
 	return &Snapshot{
-		Trend:       useTrend,
-		Model:       p.cfg.Model.Name,
-		Location:    Location{lat, lon},
-		FrameTime:   time.Unix(r.frame, 0).UTC(),
-		GeneratedAt: time.Now().UTC(),
-		Threshold:   p.cfg.Threshold,
-		Likely:      p.cfg.Likely,
-		Heavy:       p.cfg.Heavy,
-		FramesUsed:  r.prep.Used,
-		KmPerPx:     opt.KmPerPx,
-		Result:      r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend),
-		Mosaic:      r.cur, Field: r.prep.Display, X: x, Y: y,
+		StormsNearby: r.prep.Nearby(x, y, stormRadiusKm/opt.KmPerPx),
+		Trend:        useTrend,
+		Model:        p.cfg.Model.Name,
+		Location:     Location{lat, lon},
+		FrameTime:    time.Unix(r.frame, 0).UTC(),
+		GeneratedAt:  time.Now().UTC(),
+		Threshold:    p.cfg.Threshold,
+		Likely:       p.cfg.Likely,
+		Heavy:        p.cfg.Heavy,
+		FramesUsed:   r.prep.Used,
+		KmPerPx:      opt.KmPerPx,
+		Result:       r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend),
+		Mosaic:       r.cur, Field: r.prep.Display, X: x, Y: y,
 	}
 }
