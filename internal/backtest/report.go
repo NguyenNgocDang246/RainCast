@@ -125,20 +125,19 @@ func (st *State) report(cfg Config) Report {
 	classResults(cfg, blocks, rep.Results)
 	fssResults(cfg, blocks, rep.Results)
 
-	// Regions and climate groups.
+	rep.Comparisons = st.compare(cfg, blocks, rep.Results)
+
+	// Regions and groups.
 	byRegion := map[string][]*block{}
-	byClimate := map[string][]*block{}
 	for _, b := range blocks {
 		byRegion[b.Region] = append(byRegion[b.Region], b)
-		byClimate[b.Climate] = append(byClimate[b.Climate], b)
 	}
 	names := make([]string, 0, len(st.Regions))
 	for name := range st.Regions {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	climateEvents := map[string]int{}
-	climateRegions := map[string]int{}
+	events := map[string]int{}
 	for _, name := range names {
 		r := st.Regions[name]
 		ev := countEvents(r.Rainy, cfg)
@@ -146,8 +145,7 @@ func (st *State) report(cfg Config) Report {
 		rep.Frames += len(r.Rainy)
 		rep.Skipped += r.Skipped
 		rep.Points = max(rep.Points, r.Points)
-		climateEvents[r.Climate] += ev
-		climateRegions[r.Climate]++
+		events[name] = ev
 		ra, _, ri := sum(byRegion[name], nVar, nLead)
 		s := RegionSummary{Name: name, Climate: r.Climate, Frames: len(r.Rainy), Skipped: r.Skipped, Issues: ri, Events: ev}
 		for v := range nVar {
@@ -159,17 +157,30 @@ func (st *State) report(cfg Config) Report {
 		}
 		rep.Regions = append(rep.Regions, s)
 	}
-	climates := make([]string, 0, len(byClimate))
-	for c := range byClimate {
-		climates = append(climates, c)
-	}
-	sort.Strings(climates)
-	for _, c := range climates {
-		ca, cn, ci := sum(byClimate[c], nVar, nLead)
-		gr := results(cfg, ca, cn, ci)
-		classResults(cfg, byClimate[c], gr)
-		rep.Groups = append(rep.Groups, Group{Climate: c, Regions: climateRegions[c], Issues: ci,
-			Events: climateEvents[c], Results: gr})
+	for _, g := range st.groupKeys() {
+		var gb []*block
+		for _, b := range blocks {
+			if g.in(b.Climate, b.Sat) {
+				gb = append(gb, b)
+			}
+		}
+		if len(gb) == 0 {
+			continue
+		}
+		grp := Group{Climate: g.key}
+		for _, name := range names {
+			if r := st.Regions[name]; g.in(r.Climate, r.Sat) {
+				grp.Regions++
+				grp.Events += events[name]
+			}
+		}
+		ga, gn, gi := sum(gb, nVar, nLead)
+		grp.Issues = gi
+		grp.Results = results(cfg, ga, gn, gi)
+		classResults(cfg, gb, grp.Results)
+		st.bootstrap(cfg, gb, grp.Results)
+		grp.Comparisons = st.compare(cfg, gb, grp.Results)
+		rep.Groups = append(rep.Groups, grp)
 	}
 	rep.ErrCorr = st.errCorr(cfg)
 	return rep
@@ -361,4 +372,90 @@ func countEvents(rainy map[int64]bool, cfg Config) int {
 		prev = t
 	}
 	return events
+}
+
+// groupDef selects the regions of a Group.
+type groupDef struct {
+	key string
+	in  func(climate string, sat bool) bool
+}
+
+// groupKeys are the climate groups, sorted, then — when some regions are
+// seen by Himawari — the satellite split: seen, not seen, and tropical and
+// seen (the closest to Vietnam).
+func (st *State) groupKeys() []groupDef {
+	climates := map[string]bool{}
+	anySat := false
+	for _, r := range st.Regions {
+		climates[r.Climate] = true
+		anySat = anySat || r.Sat
+	}
+	keys := make([]string, 0, len(climates))
+	for c := range climates {
+		keys = append(keys, c)
+	}
+	sort.Strings(keys)
+	var out []groupDef
+	for _, c := range keys {
+		out = append(out, groupDef{c, func(cl string, _ bool) bool { return cl == c }})
+	}
+	if anySat {
+		out = append(out,
+			groupDef{"sat", func(_ string, s bool) bool { return s }},
+			groupDef{"nosat", func(_ string, s bool) bool { return !s }},
+			groupDef{"tropical_sat", func(cl string, s bool) bool { return s && cl == "tropical" }})
+	}
+	return out
+}
+
+// compare scores Config.Compare over blocks: the difference in CSI pooled
+// over the leads up to CompareLead, with a block-resampled interval.
+func (st *State) compare(cfg Config, blocks []*block, res []Result) []Comparison {
+	if len(cfg.Compare) == 0 {
+		return nil
+	}
+	idx := map[string]int{}
+	for i, r := range res {
+		idx[r.Name] = i
+	}
+	nl, last := 0, 0
+	for li, l := range cfg.Leads {
+		if l <= CompareLead {
+			nl, last = li+1, l
+		}
+	}
+	var out []Comparison
+	for _, pair := range cfg.Compare {
+		a, okA := idx[pair[0]]
+		b, okB := idx[pair[1]]
+		if !okA || !okB || nl == 0 {
+			continue
+		}
+		tot := make([][]hmf, len(blocks))
+		var all [2]hmf
+		for bi, bl := range blocks {
+			tot[bi] = make([]hmf, 2)
+			for k, v := range [2]int{a, b} {
+				for _, acc := range bl.Acc[v][:nl] {
+					tot[bi][k].h += float64(acc.H)
+					tot[bi][k].m += float64(acc.M)
+					tot[bi][k].f += float64(acc.F)
+				}
+				all[k].h += tot[bi][k].h
+				all[k].m += tot[bi][k].m
+				all[k].f += tot[bi][k].f
+			}
+		}
+		c := Comparison{Base: pair[0], Other: pair[1], MaxLead: last}
+		if all[0].h+all[0].m+all[0].f > 0 && all[1].h+all[1].m+all[1].f > 0 {
+			d := csiOf(all[1]) - csiOf(all[0])
+			c.Delta = &d
+			if _, deltas := resampleCSI(tot, 0); deltas != nil {
+				ci := percentiles(deltas[1])
+				c.CI = &ci
+			}
+		}
+		out = append(out, c)
+	}
+	return out
 }

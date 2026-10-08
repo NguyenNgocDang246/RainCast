@@ -40,11 +40,6 @@ func PixelToLatLon(x, y float64, z int) (lat, lon float64) {
 	return lat, lon
 }
 
-// TileOf returns the tile containing global pixel (x, y).
-func TileOf(x, y float64) (tx, ty int) {
-	return int(math.Floor(x / TileSize)), int(math.Floor(y / TileSize))
-}
-
 // MetersPerPixel returns the ground resolution at latitude lat and zoom z.
 func MetersPerPixel(lat float64, z int) float64 {
 	return earthCircumference * math.Cos(lat*math.Pi/180) / worldSize(z)

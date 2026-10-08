@@ -53,6 +53,31 @@ func (g *Grid) MedianInRadius(x, y float64, r int) float32 {
 	return vals[len(vals)/2]
 }
 
+// Bilinear interpolates the echo at (x, y) between the four nearest pixel
+// centers, which lie on integer coordinates.
+func (g *Grid) Bilinear(x, y float64) float32 {
+	x0, y0 := math.Floor(x), math.Floor(y)
+	fx, fy := float32(x-x0), float32(y-y0)
+	ix, iy := int(x0), int(y0)
+	top := g.At(ix, iy)*(1-fx) + g.At(ix+1, iy)*fx
+	bottom := g.At(ix, iy+1)*(1-fx) + g.At(ix+1, iy+1)*fx
+	return top*(1-fy) + bottom*fy
+}
+
+// PointEcho is the echo used for the point (x, y): the echo at the point
+// itself when it reaches strong dBZ, else the median within r pixels.
+// Convective cores are often only a pixel or two across, and the median
+// alone drops them for the drier ring around, though the map shows the
+// core over the point; weak echoes keep the median, which ignores specks.
+func (g *Grid) PointEcho(x, y float64, r int, strong float32) float32 {
+	if strong > 0 {
+		if v := g.Bilinear(x, y); v >= strong {
+			return v
+		}
+	}
+	return g.MedianInRadius(x, y, r)
+}
+
 // Mosaic is a Grid stitched from adjacent tiles at one zoom level.
 type Mosaic struct {
 	*Grid

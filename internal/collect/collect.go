@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"raincast/internal/geo"
+	"raincast/internal/himawari"
 	"raincast/internal/radar"
 	"raincast/internal/rainviewer"
 	"raincast/internal/store"
@@ -59,6 +60,22 @@ type Store interface {
 	TouchRegion(ctx context.Context, r store.Region, now int64) error
 	RecordFrame(ctx context.Context, t int64, path string) error
 }
+
+// SatFetcher caches the satellite tiles a radar frame's forecasts read:
+// *himawari.Client is one.
+type SatFetcher interface {
+	PrefetchFor(ctx context.Context, radarTime int64, tiles []himawari.Tile) (int64, error)
+}
+
+// satJob is one region's satellite tiles for one radar frame.
+type satJob struct {
+	t     int64
+	tiles []himawari.Tile
+}
+
+// satQueue bounds the satellite work waiting; beyond it jobs are dropped
+// and come back on the next tick, as the frame is still in the feed.
+const satQueue = 512
 
 // Feed returns the tile host and the current frame index, oldest first.
 type Feed func() (host string, frames []rainviewer.Frame)
@@ -125,6 +142,12 @@ type Collector struct {
 	// budget bounds how long one tick spends backfilling older frames, so
 	// scouting and new frames are never held up; 0 means no bound.
 	budget time.Duration
+
+	// Sat, when set before Run, also caches Himawari tiles for the regions
+	// it sees, on its own goroutine so its slower pace never holds radar up.
+	Sat     SatFetcher
+	satJobs chan satJob
+	satErr  string
 }
 
 // New returns a collector.
@@ -156,6 +179,10 @@ func (c *Collector) Run(ctx context.Context, interval time.Duration) {
 		break
 	}
 	c.budget = interval
+	if c.Sat != nil {
+		c.satJobs = make(chan satJob, satQueue)
+		go c.runSat(ctx)
+	}
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -434,6 +461,44 @@ func (c *Collector) collect(ctx context.Context, host string, frames []rainviewe
 			if f.Time == newest.Time && r.lastFrame != f.Time {
 				c.inspect(r, raw, f.Time)
 			}
+			c.queueSat(r, f.Time)
+		}
+	}
+}
+
+// queueSat asks for the satellite tiles of region r at radar frame t, when
+// the satellite sees r; a full queue drops the job.
+func (c *Collector) queueSat(r *Region, t int64) {
+	if c.satJobs == nil || !himawari.Covers(r.Lat, r.Lon) {
+		return
+	}
+	select {
+	case c.satJobs <- satJob{t, himawari.RegionTiles(r.TileX, r.TileY, himawari.DefaultMargin)}:
+	default:
+	}
+}
+
+// runSat caches queued satellite tiles until ctx is done. Failures are only
+// logged: radar collection never waits on the satellite.
+func (c *Collector) runSat(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case j := <-c.satJobs:
+			_, err := c.Sat.PrefetchFor(ctx, j.t, j.tiles)
+			if ctx.Err() != nil {
+				return
+			}
+			c.mu.Lock()
+			c.satErr = ""
+			if err != nil {
+				c.satErr = err.Error()
+			}
+			c.mu.Unlock()
+			if err != nil {
+				c.log.Debug("collect: satellite", "time", j.t, "err", err)
+			}
 		}
 	}
 }
@@ -516,6 +581,9 @@ type Status struct {
 	Rainy24h  int    `json:"rainy_24h"`
 	Events24h int    `json:"events_24h"`
 	LastError string `json:"last_error"`
+	// SatQueued and SatError describe satellite caching, when enabled.
+	SatQueued int    `json:"sat_queued,omitempty"`
+	SatError  string `json:"sat_error,omitempty"`
 }
 
 // Status returns the collector's state.
@@ -523,7 +591,10 @@ func (c *Collector) Status() Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	st := Status{Enabled: c.cfg.Regions > 0, Target: c.cfg.Regions, Candidates: len(c.candidates),
-		LastScout: c.lastScout, LastError: c.lastErr, Active: []Region{}}
+		LastScout: c.lastScout, LastError: c.lastErr, Active: []Region{}, SatError: c.satErr}
+	if c.satJobs != nil {
+		st.SatQueued = len(c.satJobs)
+	}
 	for _, r := range c.active {
 		st.Active = append(st.Active, *r)
 	}

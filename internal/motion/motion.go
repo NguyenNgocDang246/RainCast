@@ -253,17 +253,6 @@ func intensity(v float32) float64 {
 	return float64(min(v, 65) - 10)
 }
 
-func meanStd(xs []float64) (mean, std float64) {
-	for _, x := range xs {
-		mean += x
-	}
-	mean /= float64(len(xs))
-	for _, x := range xs {
-		std += (x - mean) * (x - mean)
-	}
-	return mean, math.Sqrt(std / float64(len(xs)))
-}
-
 // subpixel fits a parabola through three samples around a peak.
 func subpixel(l, c, r float64) float64 {
 	if math.IsInf(l, -1) || math.IsInf(r, -1) {
@@ -338,15 +327,6 @@ func (f *Field) finish() {
 			f.V[i] = Vector{vx / wsum, vy / wsum}
 		}
 	}
-}
-
-// Average combines fields of the same shape with equal weights.
-func Average(fields ...*Field) *Field {
-	w := make([]float64, len(fields))
-	for i := range w {
-		w[i] = 1
-	}
-	return WeightedAverage(fields, w)
 }
 
 // WeightedAverage combines fields of the same shape. Each block averages

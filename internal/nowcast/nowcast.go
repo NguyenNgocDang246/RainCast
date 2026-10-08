@@ -15,7 +15,10 @@ type Options struct {
 	Threshold float32 // dBZ counted as rain
 	Heavy     float32 // dBZ counted as heavy rain
 	Radius    int     // pixels around the target; the median echo of this disc is used
-	KmPerPx   float64 // ground resolution, for speed reporting
+	// Strong, when set, is the dBZ at which the echo at the point itself is
+	// used instead of the median (radar.Grid.PointEcho).
+	Strong  float32
+	KmPerPx float64 // ground resolution, for speed reporting
 	// Trend, when set, lets echoes strengthen or weaken as they travel.
 	// Its effect saturates: after m minutes the change is
 	// rate·τ·(1−e^(−m/τ)), so a trend never runs away over the hour.
@@ -120,7 +123,7 @@ func Forecast(g *radar.Grid, f *motion.Field, x, y float64, opt Options) Result 
 	}
 	px, py := x, y
 	for m := 0; m <= opt.Horizon; m++ {
-		v := g.MedianInRadius(px, py, opt.Radius)
+		v := g.PointEcho(px, py, opt.Radius, opt.Strong)
 		// Only existing echoes change; empty sky does not grow rain.
 		var delta float64
 		if opt.Trend != nil && m > 0 && v >= 10 {

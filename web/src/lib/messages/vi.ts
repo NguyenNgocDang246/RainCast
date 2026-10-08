@@ -1,5 +1,18 @@
 // Vietnamese UI text. en.ts must match this shape (see Dict).
 
+/** How long incoming rain lasts (ForecastCard). */
+export type Span = "brief" | "until" | "past" | "open";
+
+/** `n`: how long the rain lasts, in minutes; `clock`: when it stops. */
+function lasting(text: string, n: number, clock: string, span: Span) {
+  if (span === "open") return text;
+  return `${text}, ${{
+    brief: "chỉ thoáng qua",
+    until: `kéo dài khoảng ${n} phút (tới ${clock})`,
+    past: `kéo dài ít nhất ${n} phút`,
+  }[span]}`;
+}
+
 export const vi = {
   meta: {
     title: "Raincast – Mưa còn bao lâu nữa?",
@@ -72,17 +85,19 @@ export const vi = {
   forecast: {
     radarAt: (clock: string) => `Radar lúc ${clock}`,
     accum: (mm: string) => `Lượng mưa ước tính khoảng ${mm} mm/h`,
-    storms: (n: number) =>
-      `${n === 1 ? "Một khối dông" : `${n} khối dông`} đang hình thành hoặc mạnh lên trong vòng 15 km — dông mới có thể xuất hiện mà radar chưa kịp thấy hướng đi.`,
     moving: (dir: string, kmh: string) => ` · mưa đang di chuyển về hướng ${dir}, ${kmh} km/h`,
     stationary: " · mưa gần như đứng yên",
-    about: (clock: string) => `Khoảng ${clock}`,
 
     // Status: the weather now.
     heavyNow: "Đang mưa to",
     rainNow: "Đang mưa",
     maybeLightNow: "Có thể đang mưa nhẹ",
     dryNow: "Hiện không mưa",
+    // Status the forecast gives for now but the latest radar frame does not show yet.
+    maybeHeavyNow: "Có thể đang mưa to",
+    maybeRainNow: "Có thể đang mưa",
+    maybeEased: "Có thể đã dịu bớt",
+    maybeStopped: "Có thể đã tạnh",
 
     // Headline: what comes next.
     heavyContinues: "Mưa to còn kéo dài",
@@ -92,19 +107,46 @@ export const vi = {
     heavyIn: "Mưa to sau",
     rainLasts: "Mưa còn kéo dài",
     stopSoon: "Sắp tạnh",
-    stopIn: "Có thể tạnh sau",
+    stopIn: "Tạnh sau",
     soon: "Sắp mưa",
     rainIn: "Mưa sau",
-    maybeSoon: "Có thể sắp mưa nhẹ",
-    maybeIn: "Có thể mưa nhẹ sau",
+    // Kept short for one line on a phone: status and detail carry the hedge.
+    maybeSoon: "Sắp mưa nhẹ",
+    maybeIn: "Mưa nhẹ sau",
     noRain: (n: number) => `Không mưa trong ${n} phút tới`,
 
-    // Detail: when, and how much.
+    // Detail: the headline's rain, how strong and how long; a later event only
+    // when it is what people act on (stop, rain again). A count says what it
+    // counts from: "N phút nữa" is from now, "kéo dài N phút" from the
+    // headline's moment. The clock is only a hint.
     noEasing: (n: number) => `Chưa thấy dấu hiệu ngớt trong ${n} phút tới`,
     noStop: (n: number) => `Chưa thấy dấu hiệu tạnh trong ${n} phút tới`,
-    drizzle: (clock: string) => `Khoảng ${clock}, mưa rất nhẹ hoặc lất phất`,
-    heavyAfter: (n: number, clock: string) => `Mưa to sau khoảng ${n} phút (${clock})`,
-    moderate: (clock: string) => `Khoảng ${clock}, mưa vừa`,
+    /** `n`: minutes from now. */
+    stopAt: (n: number, clock: string) => `Có thể tạnh hẳn khoảng ${n} phút nữa (${clock})`,
+    /** It stops outright the minute it eases. */
+    stopWith: "Có thể tạnh hẳn",
+    /** `n`: how long the break between the stop and the rain again lasts. */
+    againAt: (n: number, clock: string) => `Chỉ tạnh khoảng ${n} phút rồi có thể mưa lại (${clock})`,
+    /** `n`: how long it stays dry after the stop, at least (the forecast ends then). */
+    dryAfter: (n: number) => `Sau đó chưa thấy mưa lại, ít nhất ${n} phút`,
+    /**
+     * `n`: how long it lasts, until it stops ("until") or at least until the
+     * forecast ends ("past"); `clock`: when it stops. A passing shower
+     * ("brief") or rain starting at the forecast's end ("open") gives no time.
+     */
+    drizzle: (n: number, clock: string, span: Span) => lasting("Mưa rất nhẹ", n, clock, span),
+    moderate: (n: number, clock: string, span: Span) => lasting("Mưa vừa", n, clock, span),
+    /** How long the heavy rain in the headline lasts; hedged, heavy rain is hard to time. */
+    heavyFor: (n: number, clock: string, span: Exclude<Span, "open">) =>
+      ({
+        brief: "Mưa to chỉ thoáng qua",
+        until: `Mưa to có thể kéo dài khoảng ${n} phút (tới ${clock})`,
+        past: `Mưa to có thể kéo dài ít nhất ${n} phút`,
+      })[span],
+    /** `n`: minutes from now; the rain arriving starts lighter. */
+    heavyAfter: (n: number, clock: string) => `Có thể có lúc mưa to, khoảng ${n} phút nữa (${clock})`,
+    /** The rain arriving is heavy almost from its start. */
+    heavyAtOnce: "Có thể mưa to ngay từ đầu",
     noRainDetail: "Radar chưa thấy cơn mưa nào đang tiến về chỗ bạn",
   },
 
@@ -191,7 +233,7 @@ export const vi = {
       regionsCol: "Vùng",
       eventsCol: "Đợt mưa",
       baselineCsi: "CSI giữ nguyên",
-      climates: { tropical: "nhiệt đới", subtropical: "cận nhiệt", midlat: "ôn đới" } as Record<string, string>,
+      climates: { tropical: "nhiệt đới", subtropical: "cận nhiệt", midlat: "ôn đới", sat: "có vệ tinh", nosat: "không vệ tinh", tropical_sat: "nhiệt đới + có vệ tinh" } as Record<string, string>,
       bestCol: "Cấu hình tốt nhất",
       config: "Cấu hình",
       csiTotal: "CSI tổng",

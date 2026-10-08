@@ -285,3 +285,19 @@ func TestBackfillStopsAtBudgetButNewestIsAlwaysFetched(t *testing.T) {
 		t.Errorf("oldest frame fetched (%d tiles) past the budget", n)
 	}
 }
+
+// Only regions the satellite sees queue satellite work, and a full queue
+// drops jobs instead of blocking radar collection.
+func TestQueueSatOnlyWhereSeenAndNeverBlocks(t *testing.T) {
+	c := New(DefaultConfig(), nil, nil, nil, quiet)
+	c.satJobs = make(chan satJob, 1)
+	c.queueSat(&Region{TileX: 101, TileY: 60, Lat: 10.8, Lon: 106.7}, 1791000000)
+	c.queueSat(&Region{TileX: 64, TileY: 42, Lat: 48, Lon: 2}, 1791000000)
+	c.queueSat(&Region{TileX: 101, TileY: 60, Lat: 10.8, Lon: 106.7}, 1791000600) // full: dropped
+	if n := len(c.satJobs); n != 1 {
+		t.Fatalf("%d jobs queued, want 1", n)
+	}
+	if j := <-c.satJobs; j.t != 1791000000 || len(j.tiles) == 0 {
+		t.Fatalf("job %+v", j)
+	}
+}

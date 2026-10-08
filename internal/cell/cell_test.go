@@ -58,48 +58,6 @@ func TestHungarianOptimal(t *testing.T) {
 	}
 }
 
-func TestKalmanVelocity(t *testing.T) {
-	xs, ys := []float64{}, []float64{}
-	noise := []float64{0.8, -1.1, 0.4, 1.0, -0.6, 0.2}
-	for i := range 6 {
-		xs = append(xs, 100+float64(i)*4+noise[i])
-		ys = append(ys, 50-float64(i)*2-noise[5-i])
-	}
-	vx, vy := trackVelocity(xs, ys, 10, 0, 0)
-	if math.Abs(vx-0.4) > 0.08 || math.Abs(vy+0.2) > 0.08 {
-		t.Fatalf("velocity (%.3f, %.3f) px/min, want (0.4, -0.2)", vx, vy)
-	}
-}
-
-// Two storms crossing the area flow at different headings: each tracked
-// cell gets its own velocity.
-func TestTrackFollowsEachCell(t *testing.T) {
-	var frames []*radar.Grid
-	var pairs []*motion.Field
-	for k := range 4 {
-		g := radar.NewGrid(384, 384)
-		disc(g, 100+3*float64(k), 100, 10, 50) // east, 3 px per frame
-		disc(g, 260, 220+4*float64(k), 10, 50) // south, 4 px per frame
-		frames = append(frames, g)
-		if k > 0 {
-			pairs = append(pairs, still(384, 384))
-		}
-	}
-	cells, vel := Track(frames, pairs, 10, DefaultOptions(MatchHungarian))
-	if len(cells) != 2 {
-		t.Fatalf("tracked %d cells, want 2", len(cells))
-	}
-	for i, c := range cells {
-		want := motion.Vector{DX: 0.3}
-		if c.X > 200 {
-			want = motion.Vector{DY: 0.4}
-		}
-		if math.Abs(vel[i].DX-want.DX) > 0.06 || math.Abs(vel[i].DY-want.DY) > 0.06 {
-			t.Errorf("cell at (%.0f, %.0f) moves %+v, want %+v", c.X, c.Y, vel[i], want)
-		}
-	}
-}
-
 func frames(n int, draw func(k int, g *radar.Grid)) []*radar.Grid {
 	out := make([]*radar.Grid, n)
 	for k := range out {

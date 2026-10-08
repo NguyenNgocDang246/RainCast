@@ -6,7 +6,6 @@ import (
 	"strings"
 	"sync"
 
-	"raincast/internal/cell"
 	"raincast/internal/motion"
 	"raincast/internal/nowcast"
 	"raincast/internal/radar"
@@ -27,10 +26,6 @@ type Model struct {
 	// Trend lets echoes grow or weaken as they travel, each member along
 	// its own motion.
 	Trend bool
-	// Storm follows convective cells through the frames along the first
-	// usable member's motion, to report those building near a point
-	// (Prepared.Nearby). It does not change the forecast.
-	Storm bool
 }
 
 // Default is the model the app forecasts with: the equal mean of
@@ -42,11 +37,10 @@ type Model struct {
 // lifted the broader seven-method mean (since trimmed to these three) by
 // another 0.8. On 10,727 forecast times from 135 regions (October 2026)
 // it still led every single method; setting the trend over cells from
-// their lives, a learned trend and probability matching did not help, so
-// cells are followed only to warn of storms building. Re-run
+// their lives, a learned trend and probability matching did not help. Re-run
 // cmd/backtest -fresh as data accumulates to check it still leads.
 func Default() Model {
-	return Model{Name: "ensemble", Trend: true, Storm: true, Members: []Member{
+	return Model{Name: "ensemble", Trend: true, Members: []Member{
 		{Method: LK, Pairs: 4, Weight: 1},
 		{Method: HS, Pairs: 4, Weight: 1},
 		{Method: TREC, Pairs: 4, Weight: 1},
@@ -84,9 +78,6 @@ type Prepared struct {
 	trends  []*motion.Trend
 	methods []string
 	weights []float64
-	// Storms are the cells the first usable member followed, for reporting
-	// those near a point; nil unless the model uses Storm.
-	Storms []StormInfo
 	// Used is the most frames any member's motion used.
 	Used int
 	// Display is the members' mean motion, for drawing.
@@ -125,9 +116,6 @@ func (m Model) Prepare(b *Builder, t int64, rainDBZ float32) *Prepared {
 		if f == nil {
 			continue
 		}
-		if m.Storm && p.fields == nil {
-			p.Storms = stormInfo(b.Storms(t, f, m.Members[i].Pairs))
-		}
 		p.fields = append(p.fields, f)
 		p.trends = append(p.trends, trends[i])
 		p.methods = append(p.methods, m.Members[i].Method)
@@ -158,6 +146,18 @@ func (p *Prepared) HasTrend() bool {
 		}
 	}
 	return true
+}
+
+// Member returns the motion and intensity trend (nil without one) of the
+// member using method; false when the model has no such member or it could
+// not see motion.
+func (p *Prepared) Member(method string) (*motion.Field, *motion.Trend, bool) {
+	for i, m := range p.methods {
+		if m == method {
+			return p.fields[i], p.trends[i], true
+		}
+	}
+	return nil, nil, false
 }
 
 // Forecast is the weighted mean of the members' nowcasts at (x, y): echo,
@@ -241,41 +241,4 @@ func mean(fields []*motion.Field, weights []float64) *motion.Field {
 	}
 	out.Global = motion.Vector{DX: gx, DY: gy}
 	return out
-}
-
-// StormInfo is what is reported about a followed cell.
-type StormInfo struct {
-	X, Y     float64 // centroid, pixels
-	Peak     float32 // dBZ
-	RateDBZ  float64 // dBZ/min
-	New      bool
-	Merged   bool
-	Split    bool
-	Decaying bool
-}
-
-func stormInfo(storms []cell.Storm) []StormInfo {
-	out := make([]StormInfo, 0, len(storms))
-	for _, s := range storms {
-		out = append(out, StormInfo{X: s.X, Y: s.Y, Peak: s.Peak, RateDBZ: s.RateDBZ,
-			New: s.New, Merged: s.Merged, Split: s.Split, Decaying: s.Decaying})
-	}
-	return out
-}
-
-// growingRate is the dBZ/min above which a followed cell counts as building.
-const growingRate = 0.2
-
-// Nearby counts, within r pixels of (x, y), the cells that are building:
-// newly formed or merged, or strengthening by growingRate or more.
-func (p *Prepared) Nearby(x, y, r float64) (building int) {
-	for _, s := range p.Storms {
-		if math.Hypot(s.X-x, s.Y-y) > r || s.Decaying {
-			continue
-		}
-		if s.New || s.Merged || s.RateDBZ >= growingRate {
-			building++
-		}
-	}
-	return building
 }

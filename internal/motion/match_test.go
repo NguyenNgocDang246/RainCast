@@ -143,3 +143,15 @@ func BenchmarkEstimate768(b *testing.B) {
 		Estimate(prev, cur, 10, opt)
 	}
 }
+
+// meanStd is the reference normalization the fast matcher must agree with.
+func meanStd(xs []float64) (mean, std float64) {
+	for _, x := range xs {
+		mean += x
+	}
+	mean /= float64(len(xs))
+	for _, x := range xs {
+		std += (x - mean) * (x - mean)
+	}
+	return mean, math.Sqrt(std / float64(len(xs)))
+}

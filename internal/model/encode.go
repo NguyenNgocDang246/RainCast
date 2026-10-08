@@ -17,13 +17,12 @@ type preparedWire struct {
 	Weights  []float64
 	Used     int
 	Display  motion.Field
-	Storms   []StormInfo
 	Methods  []string
 }
 
 // MarshalBinary encodes p, e.g. to share it through a cache.
 func (p *Prepared) MarshalBinary() ([]byte, error) {
-	w := preparedWire{Weights: p.weights, Used: p.Used, Storms: p.Storms, Methods: p.methods}
+	w := preparedWire{Weights: p.weights, Used: p.Used, Methods: p.methods}
 	for i, f := range p.fields {
 		w.Fields = append(w.Fields, *f)
 		t := p.trends[i]
@@ -47,7 +46,7 @@ func (p *Prepared) UnmarshalBinary(data []byte) error {
 	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&w); err != nil {
 		return err
 	}
-	*p = Prepared{weights: w.Weights, Used: w.Used, Storms: w.Storms}
+	*p = Prepared{weights: w.Weights, Used: w.Used}
 	for i := range w.Fields {
 		p.fields = append(p.fields, &w.Fields[i])
 		// Entries cached before methods were kept have none.

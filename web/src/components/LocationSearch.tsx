@@ -157,37 +157,44 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
   return (
     <div className="relative w-full">
       <form onSubmit={submit} className="flex gap-2" role="search">
-        <input
-          type="search"
-          value={query}
-          onChange={(e) => {
-            setQuery(e.target.value);
-            setPristine(false);
-            setOpen(true);
-            setActive(-1);
-            setError(null);
-          }}
-          onFocus={(e) => {
-            setOpen(true);
-            // The map may have added a recent place meanwhile.
-            setRecent(loadRecent());
-            // Typing replaces the shown place.
-            if (pristine) e.target.select();
-          }}
-          // The input keeps focus after a pick, so focus alone won't reopen.
-          onClick={() => setOpen(true)}
-          onBlur={() => setOpen(false)}
-          onKeyDown={onKeyDown}
-          placeholder={t.search.placeholder}
-          role="combobox"
-          aria-label={t.search.label}
-          aria-autocomplete="list"
-          aria-expanded={showList}
-          aria-controls={listId}
-          aria-activedescendant={showList && active >= 0 ? `${listId}-${active}` : undefined}
-          autoComplete="off"
-          className="min-w-0 flex-1 rounded-xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/30 px-4 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none [&::-webkit-search-cancel-button]:cursor-pointer"
-        />
+        <div className="relative min-w-0 flex-1">
+          <input
+            type="search"
+            enterKeyHint="search"
+            value={query}
+            onChange={(e) => {
+              setQuery(e.target.value);
+              setPristine(false);
+              setOpen(true);
+              setActive(-1);
+              setError(null);
+            }}
+            onFocus={(e) => {
+              setOpen(true);
+              // The map may have added a recent place meanwhile.
+              setRecent(loadRecent());
+              // Typing replaces the shown place.
+              if (pristine) e.target.select();
+            }}
+            // The input keeps focus after a pick, so focus alone won't reopen.
+            onClick={() => setOpen(true)}
+            onBlur={() => setOpen(false)}
+            onKeyDown={onKeyDown}
+            placeholder={t.search.placeholder}
+            role="combobox"
+            aria-label={t.search.label}
+            aria-autocomplete="list"
+            aria-expanded={showList}
+            aria-controls={listId}
+            aria-activedescendant={showList && active >= 0 ? `${listId}-${active}` : undefined}
+            autoComplete="off"
+            className="w-full rounded-xl border border-slate-800 bg-slate-900 shadow-lg shadow-black/30 px-3 py-3 text-slate-100 placeholder:text-slate-500 focus:border-sky-500 focus:outline-none sm:px-4 [&::-webkit-search-cancel-button]:cursor-pointer"
+          />
+          {/* Phones have no search button to show the search running. */}
+          {busy && (
+            <SearchIcon className="pointer-events-none absolute right-3 top-1/2 size-5 -translate-y-1/2 animate-pulse text-sky-400 sm:hidden" />
+          )}
+        </div>
         <button
           type="button"
           onClick={onLocate}
@@ -198,16 +205,15 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
         >
           <LocateIcon className={`size-5 ${locating ? "animate-spin" : ""}`} />
         </button>
-        {/* A magnifier on phones, where the row is narrow; words from sm up. */}
+        {/* Phones submit with the keyboard's search key: the row is too narrow for a button. */}
         <button
           type="submit"
           disabled={busy || !editing}
           title={t.search.submit}
           aria-label={busy ? t.search.busy : t.search.submit}
-          className="grid w-12 shrink-0 place-items-center rounded-xl bg-sky-500 shadow-lg shadow-black/30 font-medium text-slate-950 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed sm:w-auto sm:px-5 sm:py-3"
+          className="hidden shrink-0 place-items-center rounded-xl bg-sky-500 px-5 py-3 font-medium text-slate-950 shadow-lg shadow-black/30 transition hover:bg-sky-400 disabled:bg-slate-800 disabled:text-slate-500 cursor-pointer disabled:cursor-not-allowed sm:grid"
         >
-          <SearchIcon className={`size-5 sm:hidden ${busy ? "animate-pulse" : ""}`} />
-          <span className="hidden sm:inline">{busy ? t.search.busy : t.search.submit}</span>
+          {busy ? t.search.busy : t.search.submit}
         </button>
       </form>
 

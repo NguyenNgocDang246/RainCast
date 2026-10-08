@@ -55,16 +55,6 @@ func TestEstimateNoRain(t *testing.T) {
 	}
 }
 
-func TestAverage(t *testing.T) {
-	a := blobs(256, 256, 0, 0)
-	b := blobs(256, 256, 4, 2)
-	c := blobs(256, 256, 8, 4)
-	f := Average(Estimate(a, b, 10, DefaultOptions()), Estimate(b, c, 10, DefaultOptions()))
-	if math.Abs(f.Global.DX*10-4) > 1 || math.Abs(f.Global.DY*10-2) > 1 {
-		t.Fatalf("global = %+v", f.Global)
-	}
-}
-
 func TestWeightedAverage(t *testing.T) {
 	mk := func(dx float64) *Field {
 		f := &Field{BlockSize: 32, BW: 1, BH: 1, V: []Vector{{DX: dx}}, Valid: []bool{true}}

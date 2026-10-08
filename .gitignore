@@ -4,3 +4,5 @@ data/
 .playwright-mcp/
 .env
 /geoip/
+# Trained ML models (scripts/ml/train.py), several MB each
+internal/ml/models/*.json
