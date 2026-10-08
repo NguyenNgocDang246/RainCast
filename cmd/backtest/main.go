@@ -16,6 +16,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -24,6 +25,7 @@ import (
 	"raincast/internal/dotenv"
 	"raincast/internal/guard"
 	"raincast/internal/pipeline"
+	"raincast/internal/progress"
 	"raincast/internal/store"
 	"raincast/internal/verify"
 )
@@ -40,6 +42,7 @@ func main() {
 	step := flag.Int("step", 8, "sample spacing in pixels (~1.2 km each)")
 	fresh := flag.Bool("fresh", false, "score everything again instead of adding to the saved scores")
 	days := flag.Int("days", 0, "with -fresh: only frames from the last N days (0 = all)")
+	sinceFlag := flag.String("since", "", "score only forecast times from this moment (unix seconds or RFC 3339), e.g. the -train-until given to scripts/ml/train.py, so the ML is scored on times it never saw")
 	out := flag.String("out", "data/backtest.json", "write the report here, for the admin page (empty to skip)")
 	parallel := flag.Int("parallel", 0, "regions scored at once (0 = all usable cores)")
 	workers := flag.Int("workers", 0, "goroutines per motion field (0 = all usable cores)")
@@ -47,6 +50,11 @@ func main() {
 	prune := flag.Bool("prune", false, "list the frames, tiles and regions no backtest can use (nothing from the last 3 hours); with -yes, delete them")
 	yes := flag.Bool("yes", false, "with -prune: really delete")
 	paper := flag.Bool("paper", false, "score the way published nowcast verifications do (one pixel per sample, leads to 90 min, mm/h thresholds), into its own state and -out data/backtest-paper.json")
+	mlDir := flag.String("ml-dir", "internal/ml/models", "models exported by scripts/ml/train.py; an ML variant is scored per feature set found (none: no ML variants)")
+	dump := flag.String("dump-features", "", "with -fresh: write training rows for scripts/ml/train.py here (float32, plus a .json sidecar)")
+	dumpEvery := flag.Int("dump-every", 2, "with -dump-features: dump one sample point in N across and down")
+	satCache := flag.String("sat-cache", "", "Himawari tile cache for the ML features (cmd/collect, cmd/satfill), e.g. data/himawari; empty, the default: none")
+	nwpCache := flag.String("nwp-cache", "", "Open-Meteo history cache for the ML features, e.g. data/nwp; empty, the default: no NWP")
 	inventory := flag.Bool("inventory", false, "only report what collect has cached per region: frames, unbroken runs and how many the backtest can use; scores nothing")
 	def := guard.DefaultLimits("data", "data/tiles")
 	// Scoring keeps every usable core busy by design: allow it, but not more.
@@ -73,13 +81,24 @@ func main() {
 	if *paper && !flagSet("out") {
 		*out = filepath.Join(*dataDir, "backtest-paper.json")
 	}
-	if err := run(*dbURL, *dataDir, *cacheDir, *out, *cpuProfile, *fresh, *paper, *step, *days, *parallel, *workers, limits()); err != nil {
+	if *dump != "" && !*fresh {
+		fmt.Fprintln(os.Stderr, "backtest: -dump-features needs -fresh (a resumed run would only dump the new forecast times)")
+		os.Exit(2)
+	}
+	since, err := parseSince(*sinceFlag)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "backtest: -since:", err)
+		os.Exit(2)
+	}
+	mlOpt := &backtest.MLOptions{SatCache: *satCache, NWPCache: *nwpCache, ModelDir: *mlDir, Dump: *dump, DumpEvery: *dumpEvery}
+	if err := run(*dbURL, *dataDir, *cacheDir, *out, *cpuProfile, *fresh, *paper, *step, *days, since, *parallel, *workers, mlOpt, limits()); err != nil {
 		fmt.Fprintln(os.Stderr, "backtest:", err)
 		os.Exit(1)
 	}
 }
 
-func run(dbURL, dataDir, cacheDir, out, cpuProfile string, fresh, paper bool, step, days, parallel, workers int, lim guard.Limits) error {
+func run(dbURL, dataDir, cacheDir, out, cpuProfile string, fresh, paper bool, step, days int, since int64, parallel, workers int,
+	mlOpt *backtest.MLOptions, lim guard.Limits) error {
 	log := slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if cpuProfile != "" {
 		f, err := os.Create(cpuProfile)
@@ -102,7 +121,11 @@ func run(dbURL, dataDir, cacheDir, out, cpuProfile string, fresh, paper bool, st
 	}
 	defer st.Close()
 
-	o := backtest.Options{Step: step, Parallel: parallel, Workers: workers, Keep: pipeline.DefaultConfig().CacheAge}
+	mlOpt.Log = log.Info
+	o := backtest.Options{Step: step, Since: since, Parallel: parallel, Workers: workers, Keep: pipeline.DefaultConfig().CacheAge, ML: mlOpt,
+		Progress: func(done, total int64, elapsed time.Duration) {
+			log.Info("backtest: progress", progress.New(done, total, elapsed).Args()...)
+		}}
 	stateFile := "backtest_state.gob"
 	if paper {
 		cfg := backtest.PaperConfig(step)
@@ -228,10 +251,11 @@ func printReport(rep backtest.Report, out string) error {
 	printTable("Báo động giả FAR (càng thấp càng tốt)", rep.Results, func(s verify.Scores) *float64 { return s.FAR })
 	printTable("Bắt được mưa POD (càng cao càng tốt)", rep.Results, func(s verify.Scores) *float64 { return s.POD })
 	for _, g := range rep.Groups {
-		printTable(fmt.Sprintf("CSI — %s (%d vùng, %d đợt mưa)", g.Climate, g.Regions, g.Events), g.Results,
+		printTable(fmt.Sprintf("CSI — %s (%d vùng, %d đợt mưa)", groupLabel(g.Climate), g.Regions, g.Events), g.Results,
 			func(s verify.Scores) *float64 { return s.CSI })
 	}
 
+	printComparisons(rep)
 	printCorr(rep)
 
 	if out != "" {
@@ -325,7 +349,7 @@ func printPaper(rep backtest.Report) {
 	groups := []backtest.Group{{Climate: "tất cả", Regions: len(rep.Regions), Events: rep.Events, Results: rep.Results}}
 	groups = append(groups, rep.Groups...)
 	for _, g := range groups {
-		fmt.Printf("CSI kiểu bài báo — %s (%d vùng, %d đợt mưa; từng pixel ~1,2 km)\n", g.Climate, g.Regions, g.Events)
+		fmt.Printf("CSI kiểu bài báo — %s (%d vùng, %d đợt mưa; từng pixel ~1,2 km)\n", groupLabel(g.Climate), g.Regions, g.Events)
 		for k, c := range g.Results[0].Classes {
 			fmt.Printf("  %s\n", c.Class)
 			fmt.Printf("    %-28s%7s%7s%7s%7s%7s%7s\n", "", "+10'", "+30'", "+60'", "+90'", "TB 60'", "TB 90'")
@@ -447,6 +471,22 @@ func pct(v *float64) string {
 	return fmt.Sprintf("%.0f%%", *v*100)
 }
 
+// parseSince reads -since: empty is 0 (every forecast time), else unix
+// seconds or an RFC 3339 time.
+func parseSince(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		return n, nil
+	}
+	t, err := time.Parse(time.RFC3339, s)
+	if err != nil {
+		return 0, fmt.Errorf("%q is neither unix seconds nor RFC 3339", s)
+	}
+	return t.Unix(), nil
+}
+
 // flagSet reports whether the flag was given on the command line.
 func flagSet(name string) bool {
 	set := false
@@ -455,3 +495,52 @@ func flagSet(name string) bool {
 }
 
 func clock(t int64) string { return time.Unix(t, 0).Format("02/01 15:04") }
+
+// groupLabels name the report's groups.
+var groupLabels = map[string]string{
+	"tropical": "nhiệt đới", "subtropical": "cận nhiệt", "midlat": "ôn đới",
+	"sat": "có vệ tinh", "nosat": "không vệ tinh", "tropical_sat": "nhiệt đới + có vệ tinh",
+}
+
+func groupLabel(key string) string {
+	if l, ok := groupLabels[key]; ok {
+		return l
+	}
+	return key
+}
+
+// printComparisons shows the paired differences (Config.Compare) over all
+// regions and per group: an interval entirely above 0 means the second
+// setting is better. The satellite's worth is "ML không vệ tinh → ML" in
+// the groups seen by Himawari.
+func printComparisons(rep backtest.Report) {
+	if len(rep.Comparisons) == 0 {
+		return
+	}
+	groups := []backtest.Group{{Climate: "tất cả", Regions: len(rep.Regions), Events: rep.Events, Comparisons: rep.Comparisons}}
+	groups = append(groups, rep.Groups...)
+	fmt.Printf("So sánh từng cặp — Δ CSI gộp mốc tới %d' [95%%] (khoảng trên 0: bên phải tốt hơn)\n", rep.Comparisons[0].MaxLead)
+	fmt.Printf("  %-26s", "")
+	for _, c := range rep.Comparisons {
+		fmt.Printf("%30.30s", c.Base+" → "+c.Other)
+	}
+	fmt.Println()
+	for _, g := range groups {
+		if len(g.Comparisons) == 0 {
+			continue
+		}
+		fmt.Printf("  %-26.26s", fmt.Sprintf("%s (%d vùng)", groupLabel(g.Climate), g.Regions))
+		for _, c := range g.Comparisons {
+			cell := "–"
+			if c.Delta != nil {
+				cell = fmt.Sprintf("%+.1f", *c.Delta*100)
+				if c.CI != nil {
+					cell += fmt.Sprintf(" [%+.1f, %+.1f]", c.CI[0]*100, c.CI[1]*100)
+				}
+			}
+			fmt.Printf("%30s", cell)
+		}
+		fmt.Println()
+	}
+	fmt.Println()
+}

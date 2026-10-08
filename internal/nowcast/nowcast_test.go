@@ -62,6 +62,20 @@ func TestRainingNowAndMovingAway(t *testing.T) {
 	}
 }
 
+// A core smaller than the median's disc still rains on the point under it.
+func TestRainingUnderSmallCore(t *testing.T) {
+	g := radar.NewGrid(128, 128)
+	disc(g, 64, 64, 1, 40)
+	opt := Options{Horizon: 10, Threshold: 20, Radius: 2, KmPerPx: 1.2}
+	if r := Forecast(g, nil, 64, 64, opt); r.RainingNow {
+		t.Fatal("the median alone should miss the core")
+	}
+	opt.Strong = 30
+	if r := Forecast(g, nil, 64, 64, opt); !r.RainingNow || r.At(0) != 40 {
+		t.Fatalf("raining=%v at=%v, want the core's 40 dBZ", r.RainingNow, r.At(0))
+	}
+}
+
 func TestNoRain(t *testing.T) {
 	r := Forecast(radar.NewGrid(64, 64), nil, 32, 32, Options{Horizon: 60, Threshold: 20})
 	if r.ArrivalMin != -1 || r.RainingNow || r.MotionReliable {

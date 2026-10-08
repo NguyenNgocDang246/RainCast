@@ -5,6 +5,8 @@ import (
 	"math"
 	"time"
 
+	"raincast/internal/himawari"
+	"raincast/internal/ml"
 	"raincast/internal/motion"
 	"raincast/internal/nowcast"
 	"raincast/internal/radar"
@@ -33,7 +35,8 @@ func newForecast(nLead, nPoint int) forecast {
 // variants are compared on exactly the same cases.
 func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*State, error) {
 	st := NewState(cfg)
-	rs := &regionState{Climate: reg.Climate, Last: last, Rainy: map[int64]bool{}}
+	sat := reg.Lat != 0 && himawari.Covers(reg.Lat, reg.Lon)
+	rs := &regionState{Climate: reg.Climate, Sat: sat, Last: last, Rainy: map[int64]bool{}}
 	st.Regions[reg.Name] = rs
 	maxPairs := 1
 	for _, v := range cfg.Variants {
@@ -54,6 +57,21 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 			corrIdx = i
 		}
 	}
+	var members []int
+	mlRegion, mlFold := -1, ml.Fold(reg.Lat, reg.Lon)
+	if cfg.mlNeeded() {
+		for _, m := range ml.Members {
+			idx := -1
+			if n := cfg.memberName(m); n != "" {
+				idx = byName[n]
+			}
+			members = append(members, idx)
+		}
+		if cfg.ML.Dump != nil {
+			mlRegion = cfg.ML.Dump.Region(ml.RegionInfo{Name: reg.Name, Climate: reg.Climate, Lat: reg.Lat, Lon: reg.Lon,
+				Fold: mlFold, Sat: himawari.Covers(reg.Lat, reg.Lon)})
+		}
+	}
 	probRadius := func(m int) int {
 		if isLead[m] {
 			return nowcast.DefaultProbRadius(m)
@@ -62,8 +80,11 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 	}
 
 	for _, t := range reg.Source.Times() {
-		if t <= last {
+		if t <= last || t < cfg.Since {
 			continue
+		}
+		if cfg.done != nil {
+			cfg.done.Add(1)
 		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -75,11 +96,13 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		cur := w.grid(t)
 		lo, hi := cur.W/3, 2*cur.W/3 // central tile of the 3×3 mosaic
 		var points [][2]float64
+		var grid [][2]int // lattice position of each point
 		var lat lattice
 		for y := lo; y < hi; y += cfg.Step {
 			for x := lo; x < hi; x += cfg.Step {
 				if reg.Coverage.At(x, y) {
 					points = append(points, [2]float64{float64(x), float64(y)})
+					grid = append(grid, [2]int{(x - lo) / cfg.Step, (y - lo) / cfg.Step})
 					lat.put((x-lo)/cfg.Step, (y-lo)/cfg.Step)
 				}
 			}
@@ -91,6 +114,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		rs.Points = max(rs.Points, len(points))
 		b := st.block(reg.Name, reg.Climate, t, nVar, len(cfg.Classes), len(cfg.Leads))
 		b.Issues++
+		b.Sat = sat
 		hh := st.Hist[half(t)]
 
 		obs := make([][]float32, len(cfg.Leads))
@@ -99,7 +123,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 			fut := w.grid(t + int64(l)*60)
 			obs[li] = make([]float32, len(points))
 			for pi, p := range points {
-				obs[li][pi] = fut.MedianInRadius(p[0], p[1], cfg.Radius)
+				obs[li][pi] = fut.PointEcho(p[0], p[1], cfg.Radius, cfg.Strong)
 				obsDry = obsDry && obs[li][pi] < cfg.Threshold
 			}
 		}
@@ -120,7 +144,7 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		}
 
 		fc := make([]forecast, nVar)
-		base := nowcast.Options{Horizon: horizon, Threshold: cfg.Threshold, Radius: cfg.Radius, ProbRadius: probRadius}
+		base := nowcast.Options{Horizon: horizon, Threshold: cfg.Threshold, Radius: cfg.Radius, Strong: cfg.Strong, ProbRadius: probRadius}
 		// run forecasts with variant v's motion and upgrades; persistence is
 		// the zero Variant, which has no motion.
 		run := func(i int, v Variant) {
@@ -147,6 +171,13 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 		}
 		// Persistence: the echo now, everywhere in the future.
 		run(0, Variant{})
+		var mi *mlIssue
+		mlRows := func() *mlIssue {
+			if mi == nil {
+				mi = buildML(w, reg, cfg, t, cur, points, fc, members)
+			}
+			return mi
+		}
 		for vi, v := range cfg.Variants {
 			i := vi + 1
 			switch v.Method {
@@ -154,9 +185,20 @@ func scoreRegion(ctx context.Context, reg Region, cfg Config, last int64) (*Stat
 				start := time.Now()
 				fc[i] = combine(fc, v, byName, len(cfg.Leads), len(points))
 				b.Nanos[i] += int64(time.Since(start))
+			case MethodML:
+				start := time.Now()
+				if f := mlRows().forecast(cfg, v, mlFold); f != nil {
+					fc[i] = *f
+				} else {
+					fc[i] = newForecast(len(cfg.Leads), len(points))
+				}
+				b.Nanos[i] += int64(time.Since(start))
 			default:
 				run(i, v)
 			}
+		}
+		if cfg.ML != nil && cfg.ML.Dump != nil {
+			mlRows().dump(cfg, mlRegion, mlFold, t, grid, obs)
 		}
 
 		addAccum(b.Acc, fc, obs, cfg.Leads)

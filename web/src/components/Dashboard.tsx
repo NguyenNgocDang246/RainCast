@@ -224,7 +224,7 @@ export function Dashboard() {
         <LocationMap place={place ?? null} onPick={pickOnMap} />
         <LanguageSwitch title="title" />
 
-        <div className="pointer-events-none absolute inset-x-0 top-0 bottom-0 z-10 flex flex-col justify-between gap-3 p-3 sm:inset-x-auto sm:left-0 sm:w-md sm:justify-start sm:p-4">
+        <div className="pointer-events-none absolute inset-x-0 top-0 bottom-0 z-10 flex flex-col justify-between gap-3 p-3 sm:inset-x-auto sm:left-0 sm:w-md sm:justify-start lg:w-132 sm:p-4">
           <div className="pointer-events-auto mr-20 sm:mr-0">
             <LocationSearch
               onSelect={select}

@@ -173,9 +173,6 @@ func TestParse(t *testing.T) {
 func TestPreparedRoundTrip(t *testing.T) {
 	b, last := builder([]int{0, 2, 5, 9, 14})
 	p := Default().Prepare(b, last, 15)
-	if len(p.Storms) != 3 {
-		t.Fatalf("followed %d storms, want the 3 cells", len(p.Storms))
-	}
 	data, err := p.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +181,7 @@ func TestPreparedRoundTrip(t *testing.T) {
 	if err := q.UnmarshalBinary(data); err != nil {
 		t.Fatal(err)
 	}
-	if q.Used != p.Used || q.HasTrend() != p.HasTrend() || q.Display.Global != p.Display.Global || len(q.Storms) != len(p.Storms) {
+	if q.Used != p.Used || q.HasTrend() != p.HasTrend() || q.Display.Global != p.Display.Global {
 		t.Fatalf("decoded %+v, want %+v", q, p)
 	}
 	opt := nowcast.Options{Horizon: 60, Threshold: 20, Radius: 1, KmPerPx: 1.2}
@@ -228,34 +225,5 @@ func TestCacheKeysPairsByContent(t *testing.T) {
 	b2.PairID = func(int64) string { return "a" }
 	if f, _ := b2.Field(TREC, last, 1); f != fa {
 		t.Fatal("shared field not used")
-	}
-}
-
-// A cell that formed since the last frame counts as building nearby; one
-// steady for the whole history does not.
-func TestNearbyStorms(t *testing.T) {
-	grids := map[int64]*radar.Grid{}
-	for i := range 3 {
-		g := cellsAt(0)
-		if i == 2 {
-			for y := 210; y < 226; y++ {
-				for x := 210; x < 226; x++ {
-					g.Set(x, y, 45)
-				}
-			}
-		}
-		grids[int64(600*(i+1))] = g
-	}
-	b := &Builder{
-		Grid:  func(t int64) *radar.Grid { return grids[t] },
-		Prev:  func(t int64) (int64, bool) { return t - 600, grids[t-600] != nil },
-		Cache: NewCache(),
-	}
-	p := Default().Prepare(b, 1800, 15)
-	if n := p.Nearby(218, 218, 12); n != 1 {
-		t.Errorf("building storms near the new cell = %d, want 1", n)
-	}
-	if n := p.Nearby(110, 170, 12); n != 0 {
-		t.Errorf("building storms near a steady cell = %d, want 0", n)
 	}
 }

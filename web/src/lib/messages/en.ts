@@ -1,4 +1,13 @@
-import type { Dict } from "./vi";
+import type { Dict, Span } from "./vi";
+
+function lasting(text: string, n: number, clock: string, span: Span) {
+  if (span === "open") return text;
+  return `${text}, ${{
+    brief: "only briefly",
+    until: `lasting about ${n} min (until ${clock})`,
+    past: `lasting at least ${n} min`,
+  }[span]}`;
+}
 
 export const en: Dict = {
   meta: {
@@ -69,16 +78,17 @@ export const en: Dict = {
   forecast: {
     radarAt: (clock) => `Radar at ${clock}`,
     accum: (mm) => `About ${mm} mm/h of rain expected`,
-    storms: (n) =>
-      `${n === 1 ? "A storm cell is" : `${n} storm cells are`} forming or strengthening within 15 km — new storms can pop up before radar shows where they go.`,
     moving: (dir, kmh) => ` · rain moving ${dir}, ${kmh} km/h`,
     stationary: " · rain nearly stationary",
-    about: (clock) => `Around ${clock}`,
 
     heavyNow: "Heavy rain now",
     rainNow: "Raining now",
     maybeLightNow: "Possibly light rain now",
     dryNow: "Not raining",
+    maybeHeavyNow: "Possibly heavy rain now",
+    maybeRainNow: "Possibly raining now",
+    maybeEased: "Possibly easing off",
+    maybeStopped: "Possibly stopped",
 
     heavyContinues: "Heavy rain continues",
     easingSoon: "Easing off soon",
@@ -87,18 +97,29 @@ export const en: Dict = {
     heavyIn: "Heavy rain in",
     rainLasts: "Rain continues",
     stopSoon: "Stopping soon",
-    stopIn: "May stop in",
+    stopIn: "Stopping in",
     soon: "Rain soon",
     rainIn: "Rain in",
-    maybeSoon: "Light rain possible soon",
-    maybeIn: "Light rain possible in",
+    maybeSoon: "Light rain soon",
+    maybeIn: "Light rain in",
     noRain: (n) => `No rain in the next ${n} minutes`,
 
     noEasing: (n) => `No sign of letting up in the next ${n} minutes`,
     noStop: (n) => `No sign of stopping in the next ${n} minutes`,
-    drizzle: (clock) => `Around ${clock}, very light rain or drizzle`,
-    heavyAfter: (n, clock) => `Heavy rain in about ${n} min (${clock})`,
-    moderate: (clock) => `Around ${clock}, moderate rain`,
+    stopAt: (n, clock) => `May stop completely in about ${n} min (${clock})`,
+    stopWith: "May stop completely",
+    againAt: (n, clock) => `Dry for only about ${n} min, then may rain again (${clock})`,
+    dryAfter: (n) => `Then no more rain for at least ${n} min`,
+    drizzle: (n, clock, span) => lasting("Very light rain", n, clock, span),
+    heavyFor: (n, clock, span) =>
+      ({
+        brief: "Heavy only briefly",
+        until: `Heavy rain may last about ${n} min (until ${clock})`,
+        past: `Heavy rain may last at least ${n} min`,
+      })[span],
+    heavyAfter: (n, clock) => `May turn heavy in about ${n} min (${clock})`,
+    heavyAtOnce: "May be heavy from the start",
+    moderate: (n, clock, span) => lasting("Moderate rain", n, clock, span),
     noRainDetail: "Radar shows no rain heading your way",
   },
 
@@ -183,7 +204,7 @@ export const en: Dict = {
       regionsCol: "Regions",
       eventsCol: "Rain events",
       baselineCsi: "Persistence CSI",
-      climates: { tropical: "tropical", subtropical: "subtropical", midlat: "mid-latitude" },
+      climates: { tropical: "tropical", subtropical: "subtropical", midlat: "mid-latitude", sat: "seen by satellite", nosat: "no satellite", tropical_sat: "tropical + satellite" },
       bestCol: "Best setting",
       config: "Setting",
       csiTotal: "Overall CSI",

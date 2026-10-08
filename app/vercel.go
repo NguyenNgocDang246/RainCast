@@ -62,6 +62,7 @@ func (s *serverless) setup() {
 		Pipeline: cfg,
 		RedisURL: os.Getenv("REDIS_URL"),
 		Geocode:  s.geo,
+		ML:       true,
 		Server: server.Config{
 			CORSOrigin:    os.Getenv("CORS_ORIGIN"),
 			ClientTiles:   true,

@@ -51,6 +51,7 @@ func main() {
 	modelName := flag.String("model", "ensemble", "forecast model: ensemble (Lucas–Kanade + Horn–Schunck + TREC, the default) or one method: "+strings.Join(model.Methods, ", "))
 	motionPairs := flag.Int("motion-pairs", cfg.Model.Members[0].Pairs, "frame pairs (10 min each) each motion estimate averages")
 	useTrend := flag.Bool("trend", cfg.Model.Trend, "let echoes grow or weaken as they travel (the trend version is always recorded for stations)")
+	useML := flag.Bool("ml", true, "post-process forecasts with the embedded ML model (only with -model ensemble and -trend)")
 	addr := flag.String("addr", ":8080", "HTTP listen address")
 	dbURL := flag.String("database-url", os.Getenv("DATABASE_URL"), "cmd/collect's PostgreSQL, for the admin page's frame list (default $DATABASE_URL; empty: none)")
 	backtestReport := flag.String("backtest-report", "data/backtest.json", "report cmd/backtest writes, for the admin page")
@@ -117,10 +118,10 @@ func main() {
 		// Coordinates and map links still work; addresses and the map do not.
 		log.Warn("GEOAPIFY_KEY is not set: address search and map tiles are off")
 	}
-	log.Info("config", "stations", len(cfg.Stations), "model", cfg.Model.Name, "trend", cfg.Model.Trend, "geoapify", geo.Key != "")
+	log.Info("config", "stations", len(cfg.Stations), "model", cfg.Model.Name, "trend", cfg.Model.Trend, "ml", *useML, "geoapify", geo.Key != "")
 	opt := app.Options{
 		Pipeline: cfg, RedisURL: *redisURL, CacheDir: *cacheDir, RateLimit: *rateLimit,
-		Geocode: geo, GeoIPDB: *geoipDB,
+		Geocode: geo, GeoIPDB: *geoipDB, ML: *useML,
 		Server: server.Config{CORSOrigin: *cors, ClientTiles: *clientTiles, Admin: !prod},
 	}
 	// The database and the report only feed the admin page.

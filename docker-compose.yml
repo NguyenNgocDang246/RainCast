@@ -15,7 +15,7 @@ services:
       POSTGRES_USER: raincast
       POSTGRES_PASSWORD: raincast
       POSTGRES_DB: raincast
-    # Only this machine reaches it (cmd/raincast, cmd/migrate-pg on the host).
+    # Only this machine reaches it (cmd/raincast on the host).
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
