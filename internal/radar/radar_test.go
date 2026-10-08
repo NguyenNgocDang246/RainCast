@@ -127,6 +127,58 @@ func TestNoRainNextToBand(t *testing.T) {
 	if v := g.MedianInRadius(x, y, 2); v >= 20 {
 		t.Fatalf("median = %v dBZ, want < 20 (no rain)", v)
 	}
+	if v := g.PointEcho(x, y, 2, 30); v >= 20 {
+		t.Fatalf("point echo = %v dBZ, want < 20 (no rain)", v)
+	}
+}
+
+func TestPointEcho(t *testing.T) {
+	g := NewGrid(9, 9)
+	for i := range g.Data {
+		g.Data[i] = 15
+	}
+	// A 2x2 core: 4 of the 13 pixels in the disc, so the median is 15.
+	for y := 4; y < 6; y++ {
+		for x := 4; x < 6; x++ {
+			g.Set(x, y, 40)
+		}
+	}
+	if v := g.PointEcho(4.5, 4.5, 2, 30); v != 40 {
+		t.Fatalf("inside a small core = %v, want 40", v)
+	}
+	if v := g.PointEcho(4, 4, 2, 0); v != 15 {
+		t.Fatalf("without strong = %v, want the median 15", v)
+	}
+	// A weak speck keeps the median.
+	g.Set(1, 1, 25)
+	if v := g.PointEcho(1, 1, 2, 30); v != 15 {
+		t.Fatalf("weak speck = %v, want the median 15", v)
+	}
+	if v := g.Bilinear(3.5, 4); v != 27.5 {
+		t.Fatalf("bilinear halfway into the core = %v, want 27.5", v)
+	}
+}
+
+// Regression: at 13:20 on 2026-10-06 the map showed a small 40 dBZ core
+// over 60 Lê Văn Chí (Thủ Đức), in a 10-15 dBZ ring. The median alone gave
+// 15 dBZ ("no rain"); the point's own echo must be used.
+func TestRainInSmallCore(t *testing.T) {
+	data, err := os.ReadFile("testdata/tile_7_101_60_1320.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := Decode(data, DefaultPalette)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gx, gy := geo.LatLonToIndex(10.86298, 106.77767, 7)
+	x, y := gx-101*256, gy-60*256
+	if v := g.MedianInRadius(x, y, 2); v >= 20 {
+		t.Fatalf("median = %v dBZ; the case no longer shows the problem", v)
+	}
+	if v := g.PointEcho(x, y, 2, 30); v < 35 {
+		t.Fatalf("point echo = %v dBZ, want the ~40 dBZ core", v)
+	}
 }
 
 func TestRainRate(t *testing.T) {

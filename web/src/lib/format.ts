@@ -12,6 +12,12 @@ export function dropsBelow(f: Forecast, dbz: number, from = 0): number {
   return p ? p.minute : -1;
 }
 
+/** First minute after minute `from` at which the echo reaches dbz, or -1. */
+export function risesTo(f: Forecast, dbz: number, from = 0): number {
+  const p = f.series.find((s) => s.minute > from && s.dbz >= dbz);
+  return p ? p.minute : -1;
+}
+
 export function clock(ms: number, locale: Locale): string {
   return new Date(ms).toLocaleTimeString(bcp47(locale), { hour: "2-digit", minute: "2-digit" });
 }

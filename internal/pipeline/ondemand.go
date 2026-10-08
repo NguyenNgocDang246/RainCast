@@ -16,7 +16,9 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"raincast/internal/cache"
+	"raincast/internal/cell"
 	"raincast/internal/geo"
+	"raincast/internal/ml"
 	"raincast/internal/model"
 	"raincast/internal/motion"
 	"raincast/internal/radar"
@@ -88,6 +90,11 @@ type region struct {
 	prep  *model.Prepared
 	frame int64
 	tiles map[radar.TileKey][]byte // cur's tiles, to share the region
+	// scene is what Config.ML reads (nil when off); prevTiles and
+	// prevMinutes are its frame before, to share the region.
+	scene       *ml.Scene
+	prevTiles   map[radar.TileKey][]byte
+	prevMinutes float64
 }
 
 // TileID names one radar tile of a frame.
@@ -329,7 +336,7 @@ func (p *Pipeline) lookupRegion(ctx context.Context, key string) (*region, bool)
 	if p.cfg.Shared == nil {
 		return nil, false
 	}
-	data, ok := p.cfg.Shared.Get(ctx, "rc:region:"+key)
+	data, ok := p.cfg.Shared.Get(ctx, sharedRegionPrefix+key)
 	if !ok {
 		return nil, false
 	}
@@ -350,7 +357,17 @@ type regionWire struct {
 	Zoom, TX, TY int
 	Tiles        map[radar.TileKey][]byte
 	Prepared     []byte
+	// Scene is set when the region has one (region.scene): its storms and
+	// the frame before's tiles.
+	Scene       bool
+	Storms      []cell.Storm
+	PrevTiles   map[radar.TileKey][]byte
+	PrevMinutes float64
 }
+
+// sharedRegionPrefix keys regions in the shared cache; bumped when
+// regionWire changes, so older entries are not read.
+const sharedRegionPrefix = "rc:region:v2:"
 
 func (p *Pipeline) shareRegion(ctx context.Context, key string, r *region) {
 	if p.cfg.Shared == nil {
@@ -363,11 +380,14 @@ func (p *Pipeline) shareRegion(ctx context.Context, key string, r *region) {
 	}
 	var buf bytes.Buffer
 	w := regionWire{Frame: r.frame, Zoom: r.cur.Zoom, TX: r.cur.TileX, TY: r.cur.TileY, Tiles: r.tiles, Prepared: prep}
+	if r.scene != nil {
+		w.Scene, w.Storms, w.PrevTiles, w.PrevMinutes = true, r.scene.Storms, r.prevTiles, r.prevMinutes
+	}
 	if err := gob.NewEncoder(&buf).Encode(w); err != nil {
 		p.log.Warn("share region", "err", err)
 		return
 	}
-	p.cfg.Shared.Set(ctx, "rc:region:"+key, buf.Bytes(), sharedRegionTTL)
+	p.cfg.Shared.Set(ctx, sharedRegionPrefix+key, buf.Bytes(), sharedRegionTTL)
 }
 
 func decodeRegion(data []byte) (*region, error) {
@@ -383,7 +403,20 @@ func decodeRegion(data []byte) (*region, error) {
 	if err := prep.UnmarshalBinary(w.Prepared); err != nil {
 		return nil, err
 	}
-	return &region{cur: cur, prep: prep, frame: w.Frame, tiles: w.Tiles}, nil
+	r := &region{cur: cur, prep: prep, frame: w.Frame, tiles: w.Tiles}
+	if w.Scene {
+		var prev *radar.Grid
+		if len(w.PrevTiles) > 0 {
+			m, err := radar.BuildMosaic(w.PrevTiles, w.Zoom, w.TX, w.TY, regionTiles, radar.DefaultPalette)
+			if err != nil {
+				return nil, err
+			}
+			prev = m.Grid
+		}
+		r.prevTiles, r.prevMinutes = w.PrevTiles, w.PrevMinutes
+		r.scene = newScene(cur, prep, w.Frame, w.Storms, prev, w.PrevMinutes)
+	}
+	return r, nil
 }
 
 // buildRegion decodes the 2×2 block at (tx, ty) of every frame in hist
@@ -447,7 +480,9 @@ func (p *Pipeline) buildRegion(ctx context.Context, tx, ty int, hist []rainviewe
 	for _, t := range p.blockTiles(tx, ty) {
 		cur[radar.TileKey{X: t.X, Y: t.Y}] = raw[TileID{frame, t.X, t.Y}]
 	}
-	return &region{cur: grids[frame], prep: prep, frame: frame, tiles: cur}, nil
+	r := &region{cur: grids[frame], prep: prep, frame: frame, tiles: cur}
+	p.addScene(r, b, raw)
+	return r, nil
 }
 
 // motionFor returns the motion cache of the tile block at (tx, ty), marking

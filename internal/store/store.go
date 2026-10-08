@@ -121,8 +121,5 @@ func migrate(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
-// DB is the underlying connection pool, for bulk loads (cmd/migrate-pg).
-func (s *Store) DB() *sql.DB { return s.db }
-
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }

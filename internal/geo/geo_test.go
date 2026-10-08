@@ -7,7 +7,7 @@ import (
 
 func TestThuDucTile(t *testing.T) {
 	x, y := LatLonToPixel(10.85, 106.77, 7)
-	tx, ty := TileOf(x, y)
+	tx, ty := int(math.Floor(x/TileSize)), int(math.Floor(y/TileSize))
 	if tx != 101 || ty != 60 {
 		t.Fatalf("tile = (%d,%d), want (101,60)", tx, ty)
 	}

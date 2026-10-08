@@ -11,11 +11,15 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"sync"
+	"time"
 
 	"raincast/internal/backtest"
 	"raincast/internal/cache"
 	"raincast/internal/geocode"
 	"raincast/internal/geoip"
+	"raincast/internal/ml"
+	"raincast/internal/mlmodel"
 	"raincast/internal/pipeline"
 	"raincast/internal/rainviewer"
 	"raincast/internal/server"
@@ -39,7 +43,10 @@ type Options struct {
 	Geocode *geocode.Client
 	// GeoIPDB is the IP-to-country database (empty: none).
 	GeoIPDB string
-	Server  server.Config
+	// ML post-processes forecasts with the embedded model (package
+	// mlmodel), which starts loading as the app does.
+	ML     bool
+	Server server.Config
 }
 
 // App is a ready API.
@@ -60,6 +67,23 @@ func New(ctx context.Context, o Options, log *slog.Logger) (*App, error) {
 		}
 	}
 	o.Pipeline.Shared = cache.Open(ctx, o.RedisURL, log)
+	if o.ML {
+		bundle := sync.OnceValue(func() *ml.Bundle {
+			start := time.Now()
+			b, err := mlmodel.Load()
+			if err != nil {
+				// Forecasts go on without it.
+				log.Error("load ML model", "err", err)
+				return nil
+			}
+			log.Info("ML model loaded", "trained", b.Trained, "dur", time.Since(start))
+			return b
+		})
+		// Loads while the first request fetches the frame index; a
+		// forecast that needs it first waits.
+		go bundle()
+		o.Pipeline.ML = bundle
+	}
 	client := rainviewer.New(o.CacheDir)
 	if o.RateLimit > 0 {
 		client.SetRateLimit(o.RateLimit)

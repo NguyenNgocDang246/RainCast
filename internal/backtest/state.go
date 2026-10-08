@@ -6,7 +6,6 @@ import (
 	"hash/fnv"
 	"os"
 	"path/filepath"
-	"slices"
 	"sort"
 )
 
@@ -47,6 +46,7 @@ func (a *leadAcc) add(o leadAcc) {
 type block struct {
 	Region  string
 	Climate string
+	Sat     bool // the region is seen by Himawari
 	Start   int64
 	Issues  int
 	Acc     [][]leadAcc
@@ -82,6 +82,7 @@ type corrAcc struct {
 // regionState is what a region has contributed so far.
 type regionState struct {
 	Climate         string
+	Sat             bool  // seen by Himawari
 	Last            int64 // newest issue time scored
 	Frames, Skipped int
 	Points          int
@@ -121,10 +122,10 @@ func NewState(cfg Config) *State {
 // discarded.
 func (cfg Config) version() string {
 	h := fnv.New64a()
-	fmt.Fprint(h, "v3", cfg.Leads, cfg.Threshold, cfg.Radius, cfg.TrendTau, cfg.Step, cfg.StepSec, cfg.Classes,
-		cfg.FSSThresholds, cfg.FSSWindows)
+	fmt.Fprint(h, "v5", cfg.Leads, cfg.Threshold, cfg.Radius, cfg.Strong, cfg.TrendTau, cfg.Step, cfg.StepSec, cfg.Classes,
+		cfg.FSSThresholds, cfg.FSSWindows, cfg.Since)
 	for _, v := range cfg.Variants {
-		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Members)
+		fmt.Fprint(h, v.Name, v.Method, v.Pairs, v.Trend, v.Members, v.MLSet)
 	}
 	return fmt.Sprintf("%x", h.Sum64())
 }
@@ -225,7 +226,7 @@ func (st *State) merge(part *State) {
 			st.Regions[name] = pr
 			continue
 		}
-		r.Climate = pr.Climate
+		r.Climate, r.Sat = pr.Climate, pr.Sat
 		r.Last = max(r.Last, pr.Last)
 		r.Frames += pr.Frames
 		r.Skipped += pr.Skipped
@@ -284,8 +285,6 @@ func (st *State) Save(path string) error {
 	}
 	return os.Rename(tmp.Name(), path)
 }
-
-func sortInt64(s []int64) { slices.Sort(s) }
 
 // sortedBlocks returns the blocks in a stable order.
 func (st *State) sortedBlocks() []*block {

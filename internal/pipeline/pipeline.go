@@ -15,6 +15,7 @@ import (
 
 	"raincast/internal/cache"
 	"raincast/internal/geo"
+	"raincast/internal/ml"
 	"raincast/internal/model"
 	"raincast/internal/motion"
 	"raincast/internal/nowcast"
@@ -63,6 +64,11 @@ type Config struct {
 	// Model is how forecasts are made (model.Default unless chosen
 	// otherwise).
 	Model model.Model
+	// ML, when set, returns the learned post-processing (package ml),
+	// waiting for it to load; nil from it leaves forecasts as Model makes
+	// them. It applies only to a trended model with every ml.Members
+	// method, the forecasts it was trained on.
+	ML func() *ml.Bundle
 	// CacheAge is how long downloaded tiles are kept.
 	CacheAge time.Duration
 	// IndexMaxAge, when set, makes EnsureFresh reload a frame index older
@@ -104,9 +110,6 @@ type Snapshot struct {
 	KmPerPx     float64   `json:"km_per_px"`
 	Trend       bool      `json:"trend"` // intensity growth/decay applied
 	Model       string    `json:"model"` // forecast model name
-	// StormsNearby counts convective cells within stormRadiusKm that are
-	// forming or strengthening (0 when the model does not follow storms).
-	StormsNearby int `json:"storms_nearby"`
 	// NextDue is when the next radar frame is expected (Pipeline.NextDue),
 	// set as the snapshot is served: a newer forecast is not worth asking
 	// for before then.
@@ -365,7 +368,7 @@ func (p *Pipeline) loadMaps(ctx context.Context) (*rainviewer.Maps, error) {
 func (p *Pipeline) nowcastOptions(lat float64) nowcast.Options {
 	return nowcast.Options{
 		Horizon: p.cfg.Horizon, Threshold: p.cfg.Threshold, Heavy: p.cfg.Heavy,
-		Radius: p.cfg.Radius, KmPerPx: geo.MetersPerPixel(lat, p.cfg.Zoom) / 1000,
+		Radius: p.cfg.Radius, Strong: p.cfg.Likely, KmPerPx: geo.MetersPerPixel(lat, p.cfg.Zoom) / 1000,
 	}
 }
 
@@ -395,28 +398,29 @@ func (p *Pipeline) builder(history []rainviewer.Frame, grid func(int64) *radar.M
 	}
 }
 
-// stormRadiusKm is how far away a building storm is worth mentioning.
-const stormRadiusKm = 15
-
 // snapshot runs the model for (lat, lon) over a prepared region.
 func (p *Pipeline) snapshot(lat, lon float64, r *region) *Snapshot {
 	gx, gy := geo.LatLonToIndex(lat, lon, p.cfg.Zoom)
 	x, y := r.cur.Local(gx, gy)
 	opt := p.nowcastOptions(lat)
 	useTrend := p.cfg.Model.Trend && r.prep.HasTrend()
+	res := r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend)
+	name := p.cfg.Model.Name
+	if useTrend && p.applyML(r, lat, lon, x, y, opt, &res) {
+		name += "+ml"
+	}
 	return &Snapshot{
-		StormsNearby: r.prep.Nearby(x, y, stormRadiusKm/opt.KmPerPx),
-		Trend:        useTrend,
-		Model:        p.cfg.Model.Name,
-		Location:     Location{lat, lon},
-		FrameTime:    time.Unix(r.frame, 0).UTC(),
-		GeneratedAt:  time.Now().UTC(),
-		Threshold:    p.cfg.Threshold,
-		Likely:       p.cfg.Likely,
-		Heavy:        p.cfg.Heavy,
-		FramesUsed:   r.prep.Used,
-		KmPerPx:      opt.KmPerPx,
-		Result:       r.prep.Forecast(r.cur.Grid, x, y, opt, useTrend),
-		Mosaic:       r.cur, Field: r.prep.Display, X: x, Y: y,
+		Trend:       useTrend,
+		Model:       name,
+		Location:    Location{lat, lon},
+		FrameTime:   time.Unix(r.frame, 0).UTC(),
+		GeneratedAt: time.Now().UTC(),
+		Threshold:   p.cfg.Threshold,
+		Likely:      p.cfg.Likely,
+		Heavy:       p.cfg.Heavy,
+		FramesUsed:  r.prep.Used,
+		KmPerPx:     opt.KmPerPx,
+		Result:      res,
+		Mosaic:      r.cur, Field: r.prep.Display, X: x, Y: y,
 	}
 }

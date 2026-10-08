@@ -1,36 +1,33 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# RainCast web
 
-## Getting Started
+Giao diện Next.js của RainCast: tìm địa điểm, bản đồ radar và dự báo mưa 60 phút tới. Mọi dự báo do backend Go tính (`cmd/raincast` khi chạy local, `api/index.go` trên Vercel).
 
-First, run the development server:
+## Chạy local
 
-```bash
+```powershell
+# Ở thư mục gốc repo: backend nghe ở :8080
+go run ./cmd/raincast
+
+# Ở thư mục web/
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Mở http://localhost:3000 (trang admin: http://localhost:3000/admin, chỉ có khi chạy local).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Biến môi trường
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Biến | Dùng khi | Ý nghĩa |
+|---|---|---|
+| `API_URL` | `next dev` | Backend mà `/api/*` được chuyển tới, mặc định `http://localhost:8080` |
+| `NEXT_PUBLIC_API_BASE` | build trên Vercel | URL của project API; trình duyệt gọi thẳng tới đó. Để trống thì gọi cùng origin |
 
-## Learn More
+## Lệnh
 
-To learn more about Next.js, take a look at the following resources:
+| Lệnh | Việc |
+|---|---|
+| `npm run dev` | Server dev |
+| `npm run build` | Build production |
+| `npm run lint` | ESLint |
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Tham số backend và các lệnh thu dữ liệu, backtest: xem [COMMANDS.md](../COMMANDS.md).
