@@ -17,8 +17,9 @@ import (
 
 // Serverless is the API as a serverless function (api/index.go on Vercel).
 // Unlike cmd/raincast it runs nothing in the background: the frame index
-// reloads on demand, browsers download the radar tiles
-// (server.Config.ClientTiles) and forecasts are shared through Redis when
+// reloads on demand, the radar tiles are downloaded by the server within a
+// small budget and by browsers otherwise (server.Config.ClientTiles), and
+// forecasts are shared through Redis when
 // REDIS_URL is set. It needs no database and serves no admin page.
 //
 // Environment: GEOAPIFY_KEY, CORS_ORIGIN (the web app's origin), REDIS_URL
@@ -49,6 +50,10 @@ func (s *serverless) setup() {
 	// No poller: a request reloads an index older than this. RainViewer
 	// adds a frame every 10 minutes.
 	cfg.IndexMaxAge = 2 * time.Minute
+	// Vercel's outbound IPs share RainViewer's per-IP limit with other
+	// sites: the server downloads a forecast's tiles while a 429 hasn't
+	// told it to stop, and browsers download them otherwise.
+	cfg.ServerFetchPerMinute = 60
 
 	s.geo = geocode.New(os.Getenv("GEOAPIFY_KEY"), "raincast/1.0", "vn")
 	s.geo.Bias = &geocode.LatLon{Lat: cfg.Stations[0].Lat, Lon: cfg.Stations[0].Lon}

@@ -4,6 +4,8 @@ export type Forecast = {
   frame_time: string;
   /** When the next radar frame is expected: no newer forecast before then. */
   next_due?: string;
+  /** A newer radar frame arrived while this one was computed: show it, and ask again. */
+  outdated?: boolean;
   threshold_dbz: number;
   /** Below this, rain is only "possible" (very light echoes may not reach the ground). */
   likely_dbz: number;
@@ -74,30 +76,39 @@ async function readJSON<T>(res: Response): Promise<T> {
 }
 
 /** Radar tiles a forecast reads, which the browser downloads itself (internal/pipeline TilePlan). */
-type TilePlan = { frame: number; tiles: { time: number; x: number; y: number; url: string }[] };
+/** sum, when set, is the hash of the tile the server already has. */
+type TilePlan = { frame: number; tiles: { time: number; x: number; y: number; url: string; sum?: string }[] };
 type TilesNeeded = { tiles_needed: TilePlan };
+type TileID = { time: number; x: number; y: number };
+/** The tiles the server has none of, after a POST named them by hash. */
+type TilesMissing = { tiles_missing: TileID[] };
 
 const needsTiles = (r: Forecast | TilesNeeded): r is TilesNeeded => "tiles_needed" in r;
+
+const tileName = (t: TileID) => `${t.time}_${t.x}_${t.y}`;
 
 async function sha256Hex(data: BufferSource): Promise<string> {
   const sum = new Uint8Array(await crypto.subtle.digest("SHA-256", data));
   return Array.from(sum, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** The tiles' content hash, as pipeline.ContentHash computes it. */
-async function contentHash(plan: TilePlan, tiles: Uint8Array<ArrayBuffer>[]): Promise<string> {
-  const lines = await Promise.all(
-    plan.tiles.map(async (t, i) => `${t.time}:${t.x}:${t.y}:${await sha256Hex(tiles[i])}\n`),
-  );
-  return sha256Hex(new TextEncoder().encode(lines.join("")));
+/** POSTs every tile of plan: the bytes of those named in upload, the hash of the rest. */
+function postTiles(path: string, plan: TilePlan, tiles: Uint8Array<ArrayBuffer>[], sums: string[], upload: Set<string>) {
+  const form = new FormData();
+  plan.tiles.forEach((t, i) => {
+    const name = tileName(t);
+    if (upload.has(name)) form.append(name, new Blob([tiles[i]], { type: "image/png" }), "tile.png");
+    else form.append(`sum_${name}`, sums[i]);
+  });
+  return request(API_BASE + path, { method: "POST", body: form, cache: "no-store" });
 }
 
 /**
- * Forecast for a chosen place. A backend on a shared host (Vercel) answers
- * with the radar tiles to download instead: the browser fetches them from
- * RainViewer (its own per-IP limit, its own HTTP cache), asks whether the
- * server already has a forecast from exactly those tiles, and uploads them
- * when it does not.
+ * Forecast for a chosen place. A backend on a shared host (Vercel) that
+ * cannot download the radar tiles itself answers with the tiles to download
+ * instead: the browser fetches them from RainViewer (its own per-IP limit,
+ * its own HTTP cache) and uploads only those the server does not already
+ * have (usually the newest frame's, often none), naming the rest by hash.
  */
 export async function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<Forecast> {
   const path = `/api/forecast?lat=${place.lat}&lon=${place.lon}`;
@@ -112,12 +123,18 @@ export async function fetchForecast(place: Pick<Place, "lat" | "lon">): Promise<
         return new Uint8Array(await res.arrayBuffer());
       }),
     );
-    const cached = await getJSON<Forecast | TilesNeeded>(`${path}&h=${await contentHash(plan, tiles)}`);
-    if (!needsTiles(cached)) return cached;
-
-    const form = new FormData();
-    plan.tiles.forEach((t, i) => form.append(`${t.time}_${t.x}_${t.y}`, new Blob([tiles[i]], { type: "image/png" }), "tile.png"));
-    const res = await request(API_BASE + path, { method: "POST", body: form, cache: "no-store" });
+    const sums = await Promise.all(tiles.map((d) => sha256Hex(d)));
+    let upload = new Set(plan.tiles.filter((t, i) => t.sum !== sums[i]).map(tileName));
+    let res = await postTiles(path, plan, tiles, sums, upload);
+    while (res.ok) {
+      const body = (await res.json()) as Forecast | TilesMissing;
+      if (!("tiles_missing" in body)) return body;
+      // The server lost a tile it offered: send those too.
+      const more = body.tiles_missing.map(tileName).filter((n) => !upload.has(n));
+      if (more.length === 0) throw new Error("radar tiles were not accepted");
+      upload = new Set([...upload, ...more]);
+      res = await postTiles(path, plan, tiles, sums, upload);
+    }
     // A new radar frame arrived meanwhile: the answer carries the new plan.
     if (res.status === 409 && attempt === 0) {
       answer = (await res.json()) as TilesNeeded;

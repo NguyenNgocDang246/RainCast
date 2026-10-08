@@ -7,8 +7,11 @@ const IDLE_MS = 2 * 60_000;
 /** Clients wake up to this much after the due time, so they don't all ask in the same second. */
 const JITTER_MS = 10_000;
 
-/** A radar frame as an answer names it: its time and, from the server, when the next one is expected. */
-export type FrameInfo = { time: string; next_due?: string };
+/**
+ * A radar frame as an answer names it: its time and, from the server, when
+ * the next one is expected and whether a newer one is already out.
+ */
+export type FrameInfo = { time: string; next_due?: string; outdated?: boolean };
 
 /** When the frame after `f` is expected; a frame's time plus FRAME_MS when the server doesn't say. */
 export function dueOf(f: FrameInfo): number {
@@ -39,11 +42,13 @@ export function pollFrames(load: () => Promise<FrameInfo | null>): () => void {
   let timer: ReturnType<typeof setTimeout> | undefined;
   let stopped = false;
   let loading = false;
+  /** The last answer was outdated and was asked again right away. */
+  let retried = false;
 
-  const schedule = () => {
+  const schedule = (now = false) => {
     clearTimeout(timer);
     if (stopped || document.hidden) return;
-    timer = setTimeout(run, due === null ? DUE_MS : nextDelay(due, Date.now()));
+    timer = setTimeout(run, now ? 0 : due === null ? DUE_MS : nextDelay(due, Date.now()));
   };
 
   const run = async () => {
@@ -56,7 +61,10 @@ export function pollFrames(load: () => Promise<FrameInfo | null>): () => void {
       const d = dueOf(f);
       if (!Number.isNaN(d)) due = d;
     }
-    schedule();
+    // A newer frame is already out: ask for it once, right away.
+    const again = !!f?.outdated && !retried;
+    retried = again;
+    schedule(again);
   };
 
   const onVisibility = () => {

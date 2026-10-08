@@ -108,6 +108,9 @@ type TileID struct {
 type TileRef struct {
 	TileID
 	URL string `json:"url"`
+	// Sum is the hash of the tile the server has (ClientPlan): a client
+	// whose tile hashes the same sends the hash instead of the tile.
+	Sum string `json:"sum,omitempty"`
 }
 
 // TilePlan lists the tiles a forecast for a point reads: its 2×2 tile block
@@ -121,10 +124,18 @@ type TilePlan struct {
 // SHA-256 of one "time:x:y:<hex SHA-256 of the PNG>\n" line per tile. Clients
 // compute the same to ask for a cached forecast (GET /api/forecast?h=).
 func ContentHash(order []TileID, tiles map[TileID][]byte) string {
+	sums := make(map[TileID]string, len(order))
+	for _, id := range order {
+		sums[id] = tileSum(tiles[id])
+	}
+	return sumsHash(order, sums)
+}
+
+// sumsHash is ContentHash from each tile's tileSum.
+func sumsHash(order []TileID, sums map[TileID]string) string {
 	h := sha256.New()
 	for _, id := range order {
-		sum := sha256.Sum256(tiles[id])
-		fmt.Fprintf(h, "%d:%d:%d:%x\n", id.Time, id.X, id.Y, sum)
+		fmt.Fprintf(h, "%d:%d:%d:%s\n", id.Time, id.X, id.Y, sums[id])
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -201,6 +212,143 @@ func (p *Pipeline) ForecastAt(ctx context.Context, lat, lon float64) (*Snapshot,
 	return p.snapshot(lat, lon, r), nil
 }
 
+// serverFetchTimeout bounds ServerForecast's downloads: past it the client
+// downloading the tiles itself is quicker. A region's 20 tiles at once take
+// ~1.5 s on a new connection (measured from Vietnam, 2026-10).
+const serverFetchTimeout = 2500 * time.Millisecond
+
+// cooldownKey marks, in the shared cache, that RainViewer refused one of
+// this host's requests (HTTP 429): until it expires every process leaves
+// the tiles to clients.
+const cooldownKey = "rc:rv:cooldown"
+
+// defaultCooldown is how long a 429 without Retry-After stops ServerForecast.
+const defaultCooldown = time.Minute
+
+// ServerForecast forecasts (lat, lon) from tiles the server has kept or can
+// download within Config.ServerFetchPerMinute, for hosts where clients
+// otherwise download them (ClientTiles). false leaves the tiles to the
+// client: no budget left, RainViewer refusing, or any failure.
+func (p *Pipeline) ServerForecast(ctx context.Context, lat, lon float64) (*Snapshot, bool) {
+	if p.budget == nil {
+		return nil, false
+	}
+	host, frames := p.index()
+	if len(frames) < 2 {
+		return nil, false
+	}
+	hist := p.history(frames)
+	tx, ty := regionCorner(geo.LatLonToPixel(lat, lon, p.cfg.Zoom))
+	frame := hist[len(hist)-1].Time
+	key := fmt.Sprintf("f/%d/%d/%d", tx, ty, frame)
+	if r, ok := p.lookupRegion(ctx, key); ok {
+		return p.snapshot(lat, lon, r), true
+	}
+	var refs []TileRef
+	for _, f := range hist {
+		for _, t := range p.blockTiles(tx, ty) {
+			refs = append(refs, TileRef{TileID: TileID{f.Time, t.X, t.Y}, URL: rainviewer.TileURL(host, f.Path, t)})
+		}
+	}
+	raw, ok := p.serverTiles(ctx, refs)
+	if !ok {
+		return nil, false
+	}
+	r, err := p.regionFor(ctx, key, func(ctx context.Context) (*region, error) {
+		return p.buildRegion(ctx, tx, ty, hist, raw)
+	})
+	if err != nil {
+		p.log.Warn("server forecast", "key", key, "err", err)
+		return nil, false
+	}
+	return p.snapshot(lat, lon, r), true
+}
+
+// serverTiles gathers refs' tiles from the tile store, downloading the rest
+// when the budget allows and RainViewer is not refusing this host.
+func (p *Pipeline) serverTiles(ctx context.Context, refs []TileRef) (map[TileID][]byte, bool) {
+	raw := make(map[TileID][]byte, len(refs))
+	var mu sync.Mutex
+	var missing []TileRef
+	var wg sync.WaitGroup
+	for _, ref := range refs {
+		wg.Go(func() {
+			data, ok := p.tiles.trusted(ctx, ref.TileID)
+			mu.Lock()
+			defer mu.Unlock()
+			if ok {
+				raw[ref.TileID] = data
+			} else {
+				missing = append(missing, ref)
+			}
+		})
+	}
+	wg.Wait()
+	if len(missing) == 0 {
+		return raw, true
+	}
+	if p.coolingDown(ctx) || !p.budget.TryTake(len(missing)) {
+		return nil, false
+	}
+	ctx, cancel := context.WithTimeout(ctx, serverFetchTimeout)
+	defer cancel()
+	// All at once: at most a region's 20 tiles, multiplexed over one
+	// HTTP/2 connection; RainViewer counts requests, not concurrency.
+	g, gctx := errgroup.WithContext(ctx)
+	for _, ref := range missing {
+		g.Go(func() error {
+			data, err := p.quick.Fetch(gctx, ref.URL)
+			if err != nil {
+				return err
+			}
+			mu.Lock()
+			raw[ref.TileID] = data
+			mu.Unlock()
+			return nil
+		})
+	}
+	err := g.Wait()
+	// Tiles that did arrive are kept: the client then uploads fewer.
+	for _, ref := range missing {
+		if data, ok := raw[ref.TileID]; ok {
+			wg.Go(func() { p.tiles.putTrusted(ctx, ref.TileID, data) })
+		}
+	}
+	wg.Wait()
+	if err != nil {
+		if errors.Is(err, rainviewer.ErrRateLimited) {
+			p.coolDown(ctx, rainviewer.RetryAfter(err))
+		}
+		p.log.Info("server tiles", "missing", len(missing), "err", err)
+		return nil, false
+	}
+	return raw, true
+}
+
+// coolingDown reports whether RainViewer recently refused this host.
+func (p *Pipeline) coolingDown(ctx context.Context) bool {
+	if time.Now().UnixNano() < p.cooldown.Load() {
+		return true
+	}
+	if p.cfg.Shared == nil {
+		return false
+	}
+	_, ok := p.cfg.Shared.Get(ctx, cooldownKey)
+	return ok
+}
+
+// coolDown stops ServerForecast's downloads for d (defaultCooldown when 0),
+// in every process sharing the cache.
+func (p *Pipeline) coolDown(ctx context.Context, d time.Duration) {
+	if d <= 0 {
+		d = defaultCooldown
+	}
+	p.cooldown.Store(time.Now().Add(d).UnixNano())
+	if p.cfg.Shared != nil {
+		p.cfg.Shared.Set(context.WithoutCancel(ctx), cooldownKey, []byte{1}, d)
+	}
+}
+
 // Plan lists the tiles a forecast for (lat, lon) needs, for clients that
 // download them (ForecastFromTiles).
 func (p *Pipeline) Plan(lat, lon float64) (TilePlan, error) {
@@ -209,12 +357,47 @@ func (p *Pipeline) Plan(lat, lon float64) (TilePlan, error) {
 		return TilePlan{}, ErrNotReady
 	}
 	tx, ty := regionCorner(geo.LatLonToPixel(lat, lon, p.cfg.Zoom))
-	plan := TilePlan{Frame: frames[len(frames)-1].Time}
-	for _, f := range p.history(frames) {
+	return p.planOf(host, p.history(frames), tx, ty), nil
+}
+
+// planOf lists the tiles of block (tx, ty) in every frame of hist.
+func (p *Pipeline) planOf(host string, hist []rainviewer.Frame, tx, ty int) TilePlan {
+	plan := TilePlan{Frame: hist[len(hist)-1].Time}
+	for _, f := range hist {
 		for _, t := range p.blockTiles(tx, ty) {
-			plan.Tiles = append(plan.Tiles, TileRef{TileID{f.Time, t.X, t.Y}, rainviewer.TileURL(host, f.Path, t)})
+			plan.Tiles = append(plan.Tiles, TileRef{TileID: TileID{f.Time, t.X, t.Y}, URL: rainviewer.TileURL(host, f.Path, t)})
 		}
 	}
+	return plan
+}
+
+// historyAt is the history a plan made when frame was the newest: the
+// frames ending at frame, false once frame has left the index or the
+// history would be shorter than the current one.
+func (p *Pipeline) historyAt(frames []rainviewer.Frame, frame int64) ([]rainviewer.Frame, bool) {
+	for i, f := range frames {
+		if f.Time == frame {
+			hist := p.history(frames[:i+1])
+			return hist, len(hist) == len(p.history(frames))
+		}
+	}
+	return nil, false
+}
+
+// ClientPlan is Plan with the hash of each tile the server already has, so
+// a client uploads only the others in one POST.
+func (p *Pipeline) ClientPlan(ctx context.Context, lat, lon float64) (TilePlan, error) {
+	plan, err := p.Plan(lat, lon)
+	if err != nil {
+		return plan, err
+	}
+	var wg sync.WaitGroup
+	for i := range plan.Tiles {
+		wg.Go(func() {
+			plan.Tiles[i].Sum, _ = p.tiles.knownSum(ctx, plan.Tiles[i].TileID)
+		})
+	}
+	wg.Wait()
 	return plan, nil
 }
 
@@ -223,64 +406,153 @@ func (p *Pipeline) Plan(lat, lon float64) (TilePlan, error) {
 // still the newest frame's.
 func (p *Pipeline) Cached(ctx context.Context, lat, lon float64, hash string) (*Snapshot, bool) {
 	_, frames := p.index()
-	if len(frames) < 2 || hash == "" {
+	if len(frames) < 2 {
+		return nil, false
+	}
+	return p.cachedAt(ctx, lat, lon, hash, frames[len(frames)-1].Time)
+}
+
+// cachedAt is Cached for a region whose newest frame is frame.
+func (p *Pipeline) cachedAt(ctx context.Context, lat, lon float64, hash string, frame int64) (*Snapshot, bool) {
+	if hash == "" {
 		return nil, false
 	}
 	tx, ty := regionCorner(geo.LatLonToPixel(lat, lon, p.cfg.Zoom))
 	r, ok := p.lookupRegion(ctx, "h/"+hash)
-	if !ok || r.frame != frames[len(frames)-1].Time || r.cur.TileX != tx || r.cur.TileY != ty {
+	if !ok || r.frame != frame || r.cur.TileX != tx || r.cur.TileY != ty {
 		return nil, false
 	}
 	return p.snapshot(lat, lon, r), true
 }
 
 // ForecastFromTiles forecasts (lat, lon) from tiles the client downloaded
-// as Plan listed. The region is cached under the tiles' ContentHash, so
-// tiles that differ from RainViewer's (tampered with) never reach anyone
-// else's forecast. It returns ErrStaleTiles when the tiles are not the
-// newest frames' and ErrBadTiles when they are not the plan's.
-func (p *Pipeline) ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[TileID][]byte) (*Snapshot, error) {
-	plan, err := p.Plan(lat, lon)
-	if err != nil {
-		return nil, err
+// as Plan listed, possibly a frame ago. Each tile comes either as its bytes
+// (tiles) or as its tileSum (sums) when the server may already have it; the
+// tiles it has none of are returned as missing, for the client to send.
+// The region is cached under the tiles' ContentHash, so tiles that differ
+// from RainViewer's (tampered with) never reach anyone else's forecast. It
+// returns ErrStaleTiles when the plan's frames have left the index and
+// ErrBadTiles when the tiles are not the plan's.
+func (p *Pipeline) ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[TileID][]byte, sums map[TileID]string) (*Snapshot, []TileID, error) {
+	host, frames := p.index()
+	if len(frames) < 2 {
+		return nil, nil, ErrNotReady
 	}
-	order := make([]TileID, len(plan.Tiles))
-	for i, t := range plan.Tiles {
-		order[i] = t.TileID
+	// The plan the client downloaded, named by its newest frame. A frame
+	// that arrived since does not waste the work: the forecast is made
+	// from the plan's frames, and Snapshot.Outdated tells it to ask again.
+	var frame int64
+	for id := range tiles {
+		frame = max(frame, id.Time)
 	}
-	if err := checkTiles(order, tiles); err != nil {
-		return nil, err
+	for id := range sums {
+		frame = max(frame, id.Time)
 	}
-	_, frames := p.index()
-	hist := p.history(frames)
-	if hist[len(hist)-1].Time != plan.Frame {
-		return nil, ErrStaleTiles // the index moved on since Plan
+	if frame == 0 {
+		return nil, nil, fmt.Errorf("%w: no tiles", ErrBadTiles)
+	}
+	hist, ok := p.historyAt(frames, frame)
+	if !ok {
+		return nil, nil, ErrStaleTiles
 	}
 	tx, ty := regionCorner(geo.LatLonToPixel(lat, lon, p.cfg.Zoom))
-	r, err := p.regionFor(ctx, "h/"+ContentHash(order, tiles), func(ctx context.Context) (*region, error) {
-		r, err := p.buildRegion(ctx, tx, ty, hist, tiles)
+	order := planOrder(p.planOf(host, hist, tx, ty))
+	if stale(order, tiles, sums) {
+		return nil, nil, ErrStaleTiles
+	}
+	// Every tile named: a region from exactly these tiles may be cached.
+	named := make(map[TileID]string, len(order))
+	for _, id := range order {
+		if data, ok := tiles[id]; ok {
+			named[id] = tileSum(data)
+		} else if validSum(sums[id]) {
+			named[id] = sums[id]
+		}
+	}
+	if len(named) == len(order) {
+		if snap, ok := p.cachedAt(ctx, lat, lon, sumsHash(order, named), frame); ok {
+			return snap, nil, nil
+		}
+	}
+	// Looked up at once: each may be a round trip to the shared cache.
+	found := make([][]byte, len(order))
+	var wg sync.WaitGroup
+	for i, id := range order {
+		if data, ok := tiles[id]; ok {
+			found[i] = data
+			continue
+		}
+		wg.Go(func() { found[i], _ = p.tiles.lookup(ctx, id, sums[id]) })
+	}
+	wg.Wait()
+	full := make(map[TileID][]byte, len(order))
+	var missing []TileID
+	for i, id := range order {
+		if found[i] != nil {
+			full[id] = found[i]
+		} else {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		return nil, missing, nil
+	}
+	if err := checkTiles(order, full); err != nil {
+		return nil, nil, err
+	}
+	r, err := p.regionFor(ctx, "h/"+ContentHash(order, full), func(ctx context.Context) (*region, error) {
+		r, err := p.buildRegion(ctx, tx, ty, hist, full)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrBadTiles, err)
 		}
 		return r, nil
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return p.snapshot(lat, lon, r), nil
+	// Only tiles that made a region are kept for other requests.
+	for _, id := range order {
+		if data, ok := tiles[id]; ok {
+			wg.Go(func() {
+				p.tiles.putSum(ctx, data)
+				p.tiles.claim(ctx, id, tileSum(data))
+			})
+		}
+	}
+	wg.Wait()
+	return p.snapshot(lat, lon, r), nil, nil
 }
 
-// checkTiles reports whether tiles are exactly order's, each a 256 px PNG.
-func checkTiles(order []TileID, tiles map[TileID][]byte) error {
+func planOrder(plan TilePlan) []TileID {
+	order := make([]TileID, len(plan.Tiles))
+	for i, t := range plan.Tiles {
+		order[i] = t.TileID
+	}
+	return order
+}
+
+// stale reports whether a client sent tiles of a frame order does not read:
+// a new frame arrived since its plan.
+func stale(order []TileID, tiles map[TileID][]byte, sums map[TileID]string) bool {
 	want := make(map[int64]bool)
 	for _, id := range order {
 		want[id.Time] = true
 	}
 	for id := range tiles {
 		if !want[id.Time] {
-			return ErrStaleTiles
+			return true
 		}
 	}
+	for id := range sums {
+		if !want[id.Time] {
+			return true
+		}
+	}
+	return false
+}
+
+// checkTiles reports whether tiles are exactly order's, each a 256 px PNG.
+func checkTiles(order []TileID, tiles map[TileID][]byte) error {
 	if len(tiles) != len(order) {
 		return fmt.Errorf("%w: got %d tiles, want %d", ErrBadTiles, len(tiles), len(order))
 	}

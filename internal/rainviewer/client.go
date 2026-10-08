@@ -375,6 +375,24 @@ type errRetryAfter struct {
 	after time.Duration
 }
 
+// ErrRateLimited is RainViewer refusing a request with HTTP 429.
+var ErrRateLimited = errors.New("rate limited")
+
+// RetryAfter is how long a failed request's server asked to wait, 0 when it
+// did not say.
+func RetryAfter(err error) time.Duration {
+	var ra errRetryAfter
+	if errors.As(err, &ra) {
+		return ra.after
+	}
+	return 0
+}
+
+// Fetch downloads url (a TileURL), without the disk cache.
+func (c *Client) Fetch(ctx context.Context, url string) ([]byte, error) {
+	return c.get(ctx, url)
+}
+
 // get fetches url, retrying network errors, 429 and 5xx with exponential backoff.
 func (c *Client) get(ctx context.Context, url string) ([]byte, error) {
 	var lastErr error
@@ -427,6 +445,9 @@ func (c *Client) getOnce(ctx context.Context, url string) ([]byte, error) {
 		return data, nil
 	case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
 		err := fmt.Errorf("http %d", resp.StatusCode)
+		if resp.StatusCode == http.StatusTooManyRequests {
+			err = fmt.Errorf("http %d: %w", resp.StatusCode, ErrRateLimited)
+		}
 		if secs, perr := strconv.Atoi(resp.Header.Get("Retry-After")); perr == nil && secs > 0 {
 			return nil, errRetryAfter{err, min(time.Duration(secs)*time.Second, 2*time.Minute)}
 		}

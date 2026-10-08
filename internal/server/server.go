@@ -28,11 +28,13 @@ type Source interface {
 	// background poller).
 	EnsureFresh(ctx context.Context)
 	ForecastAt(ctx context.Context, lat, lon float64) (*pipeline.Snapshot, error)
-	// Plan, Cached and ForecastFromTiles serve forecasts from tiles the
-	// client downloads (Config.ClientTiles).
-	Plan(lat, lon float64) (pipeline.TilePlan, error)
+	// ClientPlan, Cached and ForecastFromTiles serve forecasts from tiles
+	// the client downloads (Config.ClientTiles); ServerForecast first tries
+	// the tiles the server has kept or can download within its budget.
+	ClientPlan(ctx context.Context, lat, lon float64) (pipeline.TilePlan, error)
 	Cached(ctx context.Context, lat, lon float64, hash string) (*pipeline.Snapshot, bool)
-	ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte) (*pipeline.Snapshot, error)
+	ServerForecast(ctx context.Context, lat, lon float64) (*pipeline.Snapshot, bool)
+	ForecastFromTiles(ctx context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte, sums map[pipeline.TileID]string) (*pipeline.Snapshot, []pipeline.TileID, error)
 	Status() pipeline.Status
 	Radar() (pipeline.RadarFrame, bool)
 	// NextDue is when the radar frame after the one at t is expected.
