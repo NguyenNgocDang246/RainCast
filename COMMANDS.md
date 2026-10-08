@@ -64,6 +64,7 @@ go run ./cmd/raincast
 | `-cache` | `data/tiles-live` | Thư mục cache tile cho dự báo trực tiếp (tách riêng với `data/tiles` của collect) |
 | `-cache-age` | 3h | Thời gian giữ tile trực tiếp |
 | `-client-tiles` | tắt | Trình duyệt tự tải tile radar thay cho server (như khi chạy trên Vercel) |
+| `-server-fetch` | 0 | Kèm `-client-tiles`: số tile mỗi phút server vẫn tự tải trước khi để trình duyệt tải (Vercel dùng 60). Gặp 429 thì dừng một lúc |
 
 **Mô hình dự báo**
 

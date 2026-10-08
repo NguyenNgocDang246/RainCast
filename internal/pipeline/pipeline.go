@@ -9,8 +9,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"raincast/internal/cache"
@@ -77,6 +79,10 @@ type Config struct {
 	// Shared, when set, shares regions, motion and the frame index with
 	// other processes; nil keeps them in this process's memory only.
 	Shared cache.Shared
+	// ServerFetchPerMinute, when set, lets ServerForecast download up to
+	// this many tiles a minute itself before leaving them to clients: for
+	// hosts whose outbound IPs share RainViewer's limit with strangers.
+	ServerFetchPerMinute int
 }
 
 // DefaultConfig uses DefaultStations.
@@ -114,6 +120,10 @@ type Snapshot struct {
 	// set as the snapshot is served: a newer forecast is not worth asking
 	// for before then.
 	NextDue time.Time `json:"next_due,omitzero"`
+	// Outdated, set as the snapshot is served, means a newer radar frame
+	// has arrived than the one it starts from (the client's tiles were a
+	// frame behind): show it, and ask again for the newer one.
+	Outdated bool `json:"outdated,omitempty"`
 	nowcast.Result
 
 	Mosaic *radar.Mosaic `json:"-"`
@@ -133,6 +143,14 @@ type Pipeline struct {
 	regions map[string]*region // by regionFor key
 	motion  map[tileKey]*motionCache
 	flight  singleflight.Group
+	tiles   *tileStore
+
+	// ServerForecast's downloads (nil when Config.ServerFetchPerMinute is
+	// 0): a client that gives up quickly, its budget, and until when
+	// RainViewer asked this process to stop (Unix nanoseconds).
+	quick    *rainviewer.Client
+	budget   *rainviewer.Window
+	cooldown atomic.Int64
 
 	started  time.Time
 	ticks    int
@@ -143,7 +161,17 @@ type Pipeline struct {
 
 // New builds a pipeline. cfg.Stations must not be empty.
 func New(cfg Config, client *rainviewer.Client, log *slog.Logger) *Pipeline {
-	return &Pipeline{cfg: cfg, client: client, log: log, regions: map[string]*region{}, motion: map[tileKey]*motionCache{}, started: time.Now()}
+	p := &Pipeline{
+		cfg: cfg, client: client, log: log, regions: map[string]*region{}, motion: map[tileKey]*motionCache{},
+		tiles: newTileStore(cfg.Shared), started: time.Now(),
+	}
+	if cfg.ServerFetchPerMinute > 0 {
+		// No retries and no waiting: a client that downloads the tiles
+		// itself is the fallback.
+		p.quick = &rainviewer.Client{HTTP: &http.Client{Timeout: serverFetchTimeout}}
+		p.budget = rainviewer.NewWindow(cfg.ServerFetchPerMinute, time.Minute)
+	}
+	return p
 }
 
 // Primary is the first station, where address search is biased toward.

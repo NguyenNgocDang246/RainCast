@@ -27,16 +27,37 @@ func NewWindow(n int, per time.Duration) *Window {
 	return &Window{n: max(n, 1), per: per}
 }
 
+// trimLocked drops send times older than Per. Callers hold w.mu.
+func (w *Window) trimLocked(now time.Time) {
+	cut := 0
+	for cut < len(w.sent) && now.Sub(w.sent[cut]) >= w.per {
+		cut++
+	}
+	w.sent = w.sent[cut:]
+}
+
+// TryTake takes room for n requests if the window has it now, without
+// waiting, and reports whether it did.
+func (w *Window) TryTake(n int) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	now := time.Now()
+	w.trimLocked(now)
+	if len(w.sent)+n > w.n {
+		return false
+	}
+	for range n {
+		w.sent = append(w.sent, now)
+	}
+	return true
+}
+
 // Wait implements Waiter.
 func (w *Window) Wait(ctx context.Context) error {
 	for {
 		w.mu.Lock()
 		now := time.Now()
-		cut := 0
-		for cut < len(w.sent) && now.Sub(w.sent[cut]) >= w.per {
-			cut++
-		}
-		w.sent = w.sent[cut:]
+		w.trimLocked(now)
 		if len(w.sent) < w.n {
 			w.sent = append(w.sent, now)
 			w.mu.Unlock()
