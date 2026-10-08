@@ -57,6 +57,7 @@ func main() {
 	backtestReport := flag.String("backtest-report", "data/backtest.json", "report cmd/backtest writes, for the admin page")
 	redisURL := flag.String("redis", os.Getenv("REDIS_URL"), "Redis URL caching forecasts across processes (default $REDIS_URL; empty: this process's memory only)")
 	clientTiles := flag.Bool("client-tiles", false, "browsers download the radar tiles of their forecasts instead of this server (as on Vercel)")
+	serverFetch := flag.Int("server-fetch", 0, "with -client-tiles, tiles per minute the server still downloads itself before leaving them to browsers (Vercel: 60)")
 	cacheDir := flag.String("cache", "data/tiles-live", "radar tile cache directory (only for live forecasts; cmd/collect keeps its own in data/tiles)")
 	poll := flag.Duration("poll", 2*time.Minute, "how often to check for new frames")
 	cors := flag.String("cors", defCORS, "allowed CORS origin (empty to disable; default none when APP_ENV=production)")
@@ -93,6 +94,7 @@ func main() {
 		os.Exit(2)
 	}
 	cfg.Model = m
+	cfg.ServerFetchPerMinute = *serverFetch
 	// Keep at least the frames one forecast reads (pairs+1), with a margin.
 	for _, mm := range m.Members {
 		cfg.CacheAge = max(cfg.CacheAge, time.Duration(mm.Pairs+3)*10*time.Minute)

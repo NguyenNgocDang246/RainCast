@@ -1,34 +1,49 @@
 package server
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"raincast/internal/pipeline"
 )
 
-// Upload limits for POST /api/forecast: 20 tiles of a few KB to ~60 KB.
+// Upload limits for POST /api/forecast: 20 tiles of a few KB to ~60 KB, or
+// their hashes.
 const (
 	maxUploadBytes = 4 << 20
 	maxTileBytes   = 512 << 10
+	maxSumBytes    = 128
 )
 
 // TilesNeeded is the body of a forecast answer that needs the client to
-// download radar tiles (Config.ClientTiles): fetch every URL, then either
-// GET again with h=ContentHash of the tiles or POST them.
+// download radar tiles (Config.ClientTiles): fetch every URL, then POST
+// the hash of each tile that hashes as the plan's sum and the bytes of the
+// rest.
 type TilesNeeded struct {
 	Plan  pipeline.TilePlan `json:"tiles_needed"`
 	Error string            `json:"error,omitempty"`
 }
 
+// TilesMissing answers a POST naming tiles the server has none of: the
+// client POSTs again with these tiles' bytes.
+type TilesMissing struct {
+	Missing []pipeline.TileID `json:"tiles_missing"`
+}
+
 // forecast serves a forecast for the lat and lon given, which are required.
 //
-// With Config.ClientTiles the server never downloads radar tiles: a GET is
-// answered from the cache when h names tiles it has seen, and otherwise
-// with the tiles to download; a POST of those tiles (multipart, one part
-// per tile named "<time>_<x>_<y>") computes the forecast.
+// With Config.ClientTiles a GET is answered from the cache when h names
+// tiles it has seen, then from tiles the server can get itself
+// (ServerForecast), and otherwise with the tiles to download. A POST
+// (multipart) names each planned tile by a part "<time>_<x>_<y>" holding
+// its bytes or "sum_<time>_<x>_<y>" holding its hex SHA-256; the answer is
+// the forecast, or TilesMissing when the server lacks some named only by
+// hash.
 func (s *Server) forecast(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	lat, lon, ok := s.latLon(w, r)
@@ -52,7 +67,11 @@ func (s *Server) forecast(w http.ResponseWriter, r *http.Request) {
 		s.serveSnapshot(w, r, snap)
 		return
 	}
-	plan, err := s.src.Plan(lat, lon)
+	if snap, ok := s.src.ServerForecast(r.Context(), lat, lon); ok {
+		s.serveSnapshot(w, r, snap)
+		return
+	}
+	plan, err := s.src.ClientPlan(r.Context(), lat, lon)
 	if s.forecastError(w, err, lat, lon) {
 		return
 	}
@@ -60,16 +79,18 @@ func (s *Server) forecast(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) forecastFromTiles(w http.ResponseWriter, r *http.Request, lat, lon float64) {
-	tiles, err := readTiles(w, r)
+	tiles, sums, err := readTiles(w, r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	snap, err := s.src.ForecastFromTiles(r.Context(), lat, lon, tiles)
+	snap, missing, err := s.src.ForecastFromTiles(r.Context(), lat, lon, tiles, sums)
 	switch {
+	case err == nil && len(missing) > 0:
+		writeJSON(w, http.StatusOK, TilesMissing{Missing: missing})
 	case errors.Is(err, pipeline.ErrStaleTiles):
 		// A new frame arrived: hand over the new plan right away.
-		plan, perr := s.src.Plan(lat, lon)
+		plan, perr := s.src.ClientPlan(r.Context(), lat, lon)
 		if s.forecastError(w, perr, lat, lon) {
 			return
 		}
@@ -82,34 +103,49 @@ func (s *Server) forecastFromTiles(w http.ResponseWriter, r *http.Request, lat, 
 	}
 }
 
-// readTiles reads the multipart tiles of a POST.
-func readTiles(w http.ResponseWriter, r *http.Request) (map[pipeline.TileID][]byte, error) {
+// readTiles reads the multipart tiles of a POST: tile bytes by "<time>_<x>_<y>"
+// and tile hashes by "sum_<time>_<x>_<y>".
+func readTiles(w http.ResponseWriter, r *http.Request) (map[pipeline.TileID][]byte, map[pipeline.TileID]string, error) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes)
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return nil, fmt.Errorf("expected multipart tiles: %v", err)
+		return nil, nil, fmt.Errorf("expected multipart tiles: %v", err)
 	}
 	tiles := map[pipeline.TileID][]byte{}
+	sums := map[pipeline.TileID]string{}
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
-			return tiles, nil
+			return tiles, sums, nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("reading tiles: %v", err)
+			return nil, nil, fmt.Errorf("reading tiles: %v", err)
 		}
+		name, isSum := strings.CutPrefix(part.FormName(), "sum_")
 		var id pipeline.TileID
-		if n, _ := fmt.Sscanf(part.FormName(), "%d_%d_%d", &id.Time, &id.X, &id.Y); n != 3 {
-			return nil, fmt.Errorf("tile part %q is not named <time>_<x>_<y>", part.FormName())
+		if n, _ := fmt.Sscanf(name, "%d_%d_%d", &id.Time, &id.X, &id.Y); n != 3 {
+			return nil, nil, fmt.Errorf("tile part %q is not named <time>_<x>_<y> or sum_<time>_<x>_<y>", part.FormName())
 		}
-		data, err := io.ReadAll(io.LimitReader(part, maxTileBytes+1))
+		limit := maxTileBytes
+		if isSum {
+			limit = maxSumBytes
+		}
+		data, err := io.ReadAll(io.LimitReader(part, int64(limit)+1))
 		if err != nil {
-			return nil, fmt.Errorf("reading tiles: %v", err)
+			return nil, nil, fmt.Errorf("reading tiles: %v", err)
 		}
-		if len(data) > maxTileBytes {
-			return nil, fmt.Errorf("tile %s is too large", part.FormName())
+		if len(data) > limit {
+			return nil, nil, fmt.Errorf("tile part %s is too large", part.FormName())
 		}
-		tiles[id] = data
+		if !isSum {
+			tiles[id] = data
+			continue
+		}
+		sum := strings.ToLower(strings.TrimSpace(string(data)))
+		if b, err := hex.DecodeString(sum); err != nil || len(b) != sha256.Size {
+			return nil, nil, fmt.Errorf("tile part %s is not a hex SHA-256", part.FormName())
+		}
+		sums[id] = sum
 	}
 }
 
@@ -133,6 +169,9 @@ func (s *Server) serveSnapshot(w http.ResponseWriter, r *http.Request, snap *pip
 	// A copy: the snapshot may be cached and served concurrently.
 	out := *snap
 	out.NextDue = s.src.NextDue(snap.FrameTime)
+	if f, ok := s.src.Radar(); ok && snap.FrameTime.Before(f.Time) {
+		out.Outdated = true
+	}
 	writeJSON(w, http.StatusOK, &out)
 }
 

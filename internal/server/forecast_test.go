@@ -11,6 +11,7 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 )
 
 func clientTilesServer(src *fakeSource) http.Handler {
@@ -60,6 +61,41 @@ func TestClientTilesFlow(t *testing.T) {
 	// 4. Now the hash is known.
 	if rec := do(t, h, "/api/forecast?lat=10.8&lon=106.7&h=png1"); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "tiles_needed") {
 		t.Fatalf("known hash: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A client names its tiles by hash first and uploads only those the server
+// lacks.
+func TestClientTilesBySum(t *testing.T) {
+	src := &fakeSource{frame: 6000}
+	h := clientTilesServer(src)
+	rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"sum_6000_101_60": sha("png2")})
+	var miss TilesMissing
+	if err := json.Unmarshal(rec.Body.Bytes(), &miss); err != nil || rec.Code != http.StatusOK ||
+		len(miss.Missing) != 1 || miss.Missing[0].X != 101 {
+		t.Fatalf("unknown sum: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"6000_101_60": "png2"}); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"location"`) {
+		t.Fatalf("upload: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"sum_6000_101_60": sha("png2")}); rec.Code != http.StatusOK ||
+		!strings.Contains(rec.Body.String(), `"location"`) {
+		t.Fatalf("known sum: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"sum_6000_101_60": "nothex"}); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad sum: %d %s", rec.Code, rec.Body)
+	}
+	if rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"sum_5400_101_60": sha("png2")}); rec.Code != http.StatusConflict {
+		t.Errorf("stale sum: %d %s", rec.Code, rec.Body)
+	}
+}
+
+// A server that can get the tiles itself answers the first GET.
+func TestServerForecastAnswersGet(t *testing.T) {
+	h := clientTilesServer(&fakeSource{frame: 6000, serverTiles: true})
+	if rec := do(t, h, "/api/forecast?lat=10.8&lon=106.7"); rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "tiles_needed") {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -117,5 +153,21 @@ func TestVercelHeaders(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if gotIP != "203.0.113.9" {
 		t.Errorf("client IP = %q, want the X-Real-IP one", gotIP)
+	}
+}
+
+// A forecast older than the newest frame is served marked outdated, so the
+// client shows it and asks again.
+func TestOutdatedForecast(t *testing.T) {
+	src := &fakeSource{frame: 6000}
+	h := clientTilesServer(src)
+	rec := postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"6000_101_60": "png1"})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "outdated") {
+		t.Fatalf("newest frame: %d %s", rec.Code, rec.Body)
+	}
+	src.newest = time.Unix(6600, 0)
+	rec = postTiles(t, h, "lat=10.8&lon=106.7", map[string]string{"6000_101_60": "png1"})
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"outdated":true`) {
+		t.Fatalf("frame behind: %d %s", rec.Code, rec.Body)
 	}
 }

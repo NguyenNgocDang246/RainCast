@@ -84,7 +84,7 @@ export function Dashboard() {
         const f = await fetchForecast({ lat, lon });
         if (cancelled) return null;
         setResult({ key: k, forecast: f, error: null });
-        frame = { time: f.frame_time, next_due: f.next_due };
+        frame = { time: f.frame_time, next_due: f.next_due, outdated: f.outdated };
       } catch (e) {
         if (cancelled) return null;
         const msg = e instanceof Error ? e.message : String(e);

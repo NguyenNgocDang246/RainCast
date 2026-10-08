@@ -37,3 +37,20 @@ func TestWindowHonorsContext(t *testing.T) {
 		t.Fatal("waited past the context deadline")
 	}
 }
+
+func TestWindowTryTake(t *testing.T) {
+	w := NewWindow(5, 300*time.Millisecond)
+	if !w.TryTake(4) {
+		t.Fatal("4 of 5 refused")
+	}
+	if w.TryTake(2) {
+		t.Fatal("took 2 with 1 left")
+	}
+	if !w.TryTake(1) {
+		t.Fatal("last one refused")
+	}
+	time.Sleep(320 * time.Millisecond)
+	if !w.TryTake(5) {
+		t.Fatal("window did not empty")
+	}
+}

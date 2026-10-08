@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -21,6 +23,10 @@ type fakeSource struct {
 	refreshed  int  // EnsureFresh calls
 	frame      int64
 	cachedHash string // content hash of the last uploaded tiles
+	// serverTiles makes ServerForecast succeed, as when the server can
+	// download the tiles itself.
+	serverTiles bool
+	newest      time.Time // the newest radar frame Radar names
 }
 
 func (f *fakeSource) Ready() bool { return !f.notLoaded }
@@ -33,7 +39,7 @@ func (f *fakeSource) Radar() (pipeline.RadarFrame, bool) {
 	if f.notLoaded {
 		return pipeline.RadarFrame{}, false
 	}
-	return pipeline.RadarFrame{TileURL: "https://tiles/x/{z}/{x}/{y}.png", MaxZoom: 7}, true
+	return pipeline.RadarFrame{Time: f.newest, TileURL: "https://tiles/x/{z}/{x}/{y}.png", MaxZoom: 7}, true
 }
 
 func (f *fakeSource) ForecastAt(_ context.Context, lat, lon float64) (*pipeline.Snapshot, error) {
@@ -47,7 +53,7 @@ func (f *fakeSource) ForecastAt(_ context.Context, lat, lon float64) (*pipeline.
 func (f *fakeSource) EnsureFresh(context.Context) { f.refreshed++ }
 
 // The fake plan is one tile; its content hash is the tile's bytes.
-func (f *fakeSource) Plan(lat, lon float64) (pipeline.TilePlan, error) {
+func (f *fakeSource) ClientPlan(_ context.Context, lat, lon float64) (pipeline.TilePlan, error) {
 	if f.notLoaded {
 		return pipeline.TilePlan{}, pipeline.ErrNotReady
 	}
@@ -63,16 +69,44 @@ func (f *fakeSource) Cached(_ context.Context, lat, lon float64, hash string) (*
 	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, true
 }
 
-func (f *fakeSource) ForecastFromTiles(_ context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte) (*pipeline.Snapshot, error) {
-	data, ok := tiles[pipeline.TileID{Time: f.frame, X: 101, Y: 60}]
-	switch {
-	case len(tiles) == 1 && !ok:
-		return nil, pipeline.ErrStaleTiles
-	case len(tiles) != 1 || string(data) == "bad":
-		return nil, pipeline.ErrBadTiles
+// ServerForecast succeeds when serverTiles is set.
+func (f *fakeSource) ServerForecast(_ context.Context, lat, lon float64) (*pipeline.Snapshot, bool) {
+	if !f.serverTiles {
+		return nil, false
+	}
+	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, true
+}
+
+// The fake keeps the last uploaded tile, so naming its hash is enough.
+func (f *fakeSource) ForecastFromTiles(_ context.Context, lat, lon float64, tiles map[pipeline.TileID][]byte, sums map[pipeline.TileID]string) (*pipeline.Snapshot, []pipeline.TileID, error) {
+	id := pipeline.TileID{Time: f.frame, X: 101, Y: 60}
+	for got := range tiles {
+		if got.Time != f.frame {
+			return nil, nil, pipeline.ErrStaleTiles
+		}
+	}
+	for got := range sums {
+		if got.Time != f.frame {
+			return nil, nil, pipeline.ErrStaleTiles
+		}
+	}
+	data, ok := tiles[id]
+	if !ok {
+		if sums[id] == "" || sums[id] != sha(f.cachedHash) {
+			return nil, []pipeline.TileID{id}, nil
+		}
+		data = []byte(f.cachedHash)
+	}
+	if len(tiles) > 1 || string(data) == "bad" {
+		return nil, nil, pipeline.ErrBadTiles
 	}
 	f.cachedHash = string(data)
-	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, nil
+	return &pipeline.Snapshot{Location: pipeline.Location{Lat: lat, Lon: lon}}, nil, nil
+}
+
+func sha(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
 }
 
 type fakeGeo struct{}
