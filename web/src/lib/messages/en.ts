@@ -12,6 +12,7 @@ function lasting(text: string, n: number, clock: string, span: Span) {
 export const en: Dict = {
   meta: {
     title: "Raincast – How long until it rains?",
+    description: "How long until it rains? A rain forecast for the next 60 minutes, anywhere.",
     adminTitle: "Raincast – Admin",
   },
   language: { label: "Language" },
@@ -46,8 +47,8 @@ export const en: Dict = {
   },
 
   intro: {
-    heading: ["How long until ", "rain", " reaches you?"],
-    lead: "See the next hour of rain, right where you are.",
+    heading: ["How long until ", "it rains", "?"],
+    lead: "See the next hour of rain for any place.",
   },
 
   map: {
@@ -120,7 +121,7 @@ export const en: Dict = {
     heavyAfter: (n, clock) => `May turn heavy in about ${n} min (${clock})`,
     heavyAtOnce: "May be heavy from the start",
     moderate: (n, clock, span) => lasting("Moderate rain", n, clock, span),
-    noRainDetail: "Radar shows no rain heading your way",
+    noRainDetail: "Radar shows no rain heading this way",
   },
 
   admin: {

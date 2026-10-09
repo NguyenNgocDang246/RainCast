@@ -15,7 +15,8 @@ function lasting(text: string, n: number, clock: string, span: Span) {
 
 export const vi = {
   meta: {
-    title: "Raincast – Mưa còn bao lâu nữa?",
+    title: "Raincast – Khi nào trời mưa?",
+    description: "Khi nào trời mưa? Dự báo mưa 60 phút tới ở bất kỳ đâu.",
     adminTitle: "Raincast – Admin",
   },
   language: { label: "Ngôn ngữ" },
@@ -53,8 +54,8 @@ export const vi = {
 
   intro: {
     /** The middle part is highlighted. */
-    heading: ["Mưa còn ", "bao lâu nữa", " tới chỗ bạn?"],
-    lead: "Xem trước cơn mưa trong một giờ tới, ngay tại nơi bạn đứng.",
+    heading: ["Khi nào ", "trời mưa", "?"],
+    lead: "Xem trước mưa trong một giờ tới ở bất kỳ đâu.",
   },
 
   map: {
@@ -147,7 +148,7 @@ export const vi = {
     heavyAfter: (n: number, clock: string) => `Có thể có lúc mưa to, khoảng ${n} phút nữa (${clock})`,
     /** The rain arriving is heavy almost from its start. */
     heavyAtOnce: "Có thể mưa to ngay từ đầu",
-    noRainDetail: "Radar chưa thấy cơn mưa nào đang tiến về chỗ bạn",
+    noRainDetail: "Radar chưa thấy cơn mưa nào đang tiến về đây",
   },
 
   admin: {

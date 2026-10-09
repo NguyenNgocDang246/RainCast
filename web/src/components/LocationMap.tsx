@@ -117,7 +117,7 @@ export function LocationMap({ place, onPick }: Props) {
   const lib = useRef<typeof Leaflet | null>(null);
   const map = useRef<Leaflet.Map | null>(null);
   const pin = useRef<Leaflet.Marker | null>(null);
-  // The last point picked here: the map is already looking at it.
+  // The last point the pin was dragged to: the map is already looking at it.
   const picked = useRef<{ lat: number; lon: number } | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -178,7 +178,6 @@ export function LocationMap({ place, onPick }: Props) {
           dismissing = false;
           return;
         }
-        picked.current = { lat: e.latlng.lat, lon: e.latlng.lng };
         pickRef.current(e.latlng.lat, e.latlng.lng);
       });
       lib.current = L;
@@ -195,8 +194,9 @@ export function LocationMap({ place, onPick }: Props) {
     };
   }, []);
 
-  // Follow the chosen place: move the pin, and fly there when it was
-  // chosen by text (a picked point is already in view).
+  // Follow the chosen place: move the pin and fly there, zooming in, however
+  // it was chosen (search, a click, the browser's position); a dragged pin
+  // stays where it was dropped.
   const lat = place?.lat;
   const lon = place?.lon;
   useEffect(() => {

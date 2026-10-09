@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Be_Vietnam_Pro } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
+import { en } from "@/lib/messages/en";
 import "./globals.css";
 
 const sans = Be_Vietnam_Pro({
@@ -10,8 +11,8 @@ const sans = Be_Vietnam_Pro({
 });
 
 export const metadata: Metadata = {
-  title: "Raincast – Mưa còn bao lâu nữa?",
-  description: "Dự báo mưa 60 phút tới tại chỗ bạn từ ảnh radar RainViewer",
+  title: en.meta.title,
+  description: en.meta.description,
 };
 
 // The page has its own dark palette; light keeps browsers (auto dark mode,
@@ -22,7 +23,7 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="vi" className={`${sans.variable} h-full antialiased`}>
+    <html lang="en" className={`${sans.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col">{children}
         <Analytics />
       </body>

@@ -15,6 +15,25 @@ body {
   font-family: var(--font-sans-vi), system-ui, sans-serif;
 }
 
+/* A slim scrollbar for lists inside the dark panels. */
+.scroll-thin {
+  scrollbar-width: thin;
+  scrollbar-color: rgb(51 65 85) transparent;
+}
+
+.scroll-thin::-webkit-scrollbar {
+  width: 6px;
+}
+
+.scroll-thin::-webkit-scrollbar-thumb {
+  border-radius: 9999px;
+  background: rgb(51 65 85);
+}
+
+.scroll-thin::-webkit-scrollbar-thumb:hover {
+  background: rgb(71 85 105);
+}
+
 /* Weather backdrops (WeatherBackdrop.tsx): rain streaks, drifting clouds, sun. */
 @keyframes rain-fall {
   from {
