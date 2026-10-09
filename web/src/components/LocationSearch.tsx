@@ -1,10 +1,13 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { geocode, suggest, type Place } from "@/lib/api";
 import { useLocale, userError } from "@/lib/i18n";
 import { addRecent, clearRecent, loadRecent } from "@/lib/recent";
 import { LocateIcon, SearchIcon } from "./icons";
+
+/** Recent places shown before the list scrolls; the list keeps their height. */
+const VISIBLE_RECENT = 5;
 
 type Props = {
   onSelect: (place: Place) => void;
@@ -69,6 +72,25 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
     ? places.map((place) => ({ kind: "place", place }))
     : recent.map((place) => ({ kind: "recent", place }));
   const showList = open && items.length > 0;
+
+  // Past VISIBLE_RECENT recent places the list scrolls, as tall as its first
+  // rows (rows with an address are taller, so this is measured).
+  const listRef = useRef<HTMLUListElement>(null);
+  const scrolls = showList && !editing && items.length > VISIBLE_RECENT;
+  useLayoutEffect(() => {
+    const ul = listRef.current;
+    if (!ul) return;
+    const cut = scrolls ? (ul.children[VISIBLE_RECENT] as HTMLElement | undefined) : undefined;
+    ul.style.maxHeight = cut ? `${cut.offsetTop - ul.offsetTop}px` : "";
+  }, [scrolls, items.length]);
+
+  // Arrow keys keep the active row in view (a hovered row already is).
+  const byKey = useRef(false);
+  useEffect(() => {
+    if (!byKey.current || active < 0) return;
+    byKey.current = false;
+    document.getElementById(`${listId}-${active}`)?.scrollIntoView({ block: "nearest" });
+  }, [active, listId]);
 
   // Suggest while typing, debounced; a newer keystroke aborts the older request.
   useEffect(() => {
@@ -141,6 +163,7 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
       e.preventDefault();
       setOpen(true);
       const step = e.key === "ArrowDown" ? 1 : -1;
+      byKey.current = true;
       // Cycle through -1 (the input itself) .. n-1.
       const n = items.length + 1;
       setActive((i) => ((i + 1 + step + n) % n) - 1);
@@ -237,7 +260,7 @@ export function LocationSearch({ onSelect, value, near, onLocate, locating }: Pr
               </button>
             </div>
           )}
-          <ul id={listId} role="listbox">
+          <ul ref={listRef} id={listId} role="listbox" className="scroll-thin overflow-y-auto overscroll-contain">
             {items.map((item, i) => (
               <li
                 key={`${item.kind}:${item.place.lat},${item.place.lon},${item.place.name}`}

@@ -12,7 +12,7 @@ const STORAGE_KEY = "raincast.locale";
 export const bcp47 = (l: Locale) => (l === "vi" ? "vi-VN" : "en-GB");
 
 // The language lives in localStorage, read through useSyncExternalStore like
-// the chosen place: prerendered HTML is Vietnamese, the client switches after
+// the chosen place: prerendered HTML is English, the client switches after
 // hydration.
 const listeners = new Set<() => void>();
 
@@ -30,9 +30,9 @@ function read(): Locale {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved === "vi" || saved === "en") return saved;
   } catch {
-    // Storage unavailable; fall back to the browser language.
+    // Storage unavailable; use the default.
   }
-  return navigator.language.toLowerCase().startsWith("vi") ? "vi" : "en";
+  return "en";
 }
 
 /** A backend error message in the chosen language, when it is a known one; as is otherwise (admin pages). */
@@ -60,6 +60,6 @@ export function setLocale(l: Locale) {
 }
 
 export function useLocale() {
-  const locale = useSyncExternalStore(subscribe, read, () => "vi" as Locale);
+  const locale = useSyncExternalStore(subscribe, read, () => "en" as Locale);
   return { locale, setLocale, t: messages[locale] };
 }
