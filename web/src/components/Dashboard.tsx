@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { fetchForecast, reverse, type Forecast, type Place } from "@/lib/api";
 import { pollFrames, type FrameInfo } from "@/lib/framePoll";
 import { useLocale, userError } from "@/lib/i18n";
@@ -16,43 +16,83 @@ const LOCATE_DEADLINE_MS = 30_000;
 /** A problem shown in the sheet: raised above the forecast's backdrop, which spills past the card. */
 const NOTICE = "relative z-10 text-sm text-amber-300";
 
-// The chosen place lives in localStorage, read through useSyncExternalStore
-// so the prerendered HTML (no storage) and the client agree on first render.
+// The chosen place lives in the address bar (?lat=…&lon=…&name=…), so the
+// page can be copied and shared, and is read through useSyncExternalStore so
+// the prerendered HTML (no URL) and the client agree on first render.
+// localStorage only remembers it for a later visit without one.
 const listeners = new Set<() => void>();
 
 function subscribe(cb: () => void) {
   listeners.add(cb);
-  window.addEventListener("storage", cb);
+  window.addEventListener("popstate", cb);
   return () => {
     listeners.delete(cb);
-    window.removeEventListener("storage", cb);
+    window.removeEventListener("popstate", cb);
   };
 }
 
-function readRaw(): string | null {
+const readSearch = () => window.location.search;
+
+/** A bare point, named after its coordinates until a lookup names it. */
+function pointPlace(lat: number, lon: number): Place {
+  const round = (v: number) => Math.round(v * 1e5) / 1e5;
+  return { name: `${lat.toFixed(5)}, ${lon.toFixed(5)}`, address: "", lat: round(lat), lon: round(lon) };
+}
+
+/** The place in a query string; without a name, it is the bare point. */
+function placeFromSearch(search: string): Place | null {
+  const q = new URLSearchParams(search);
+  const lat = Number(q.get("lat"));
+  const lon = Number(q.get("lon"));
+  if (!q.has("lat") || !q.has("lon") || !Number.isFinite(lat) || !Number.isFinite(lon)) return null;
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const point = pointPlace(lat, lon);
+  return { ...point, name: q.get("name")?.trim() || point.name };
+}
+
+/** Whether a place still carries its coordinates for a name. */
+const unnamed = (p: Place) => p.name === pointPlace(p.lat, p.lon).name;
+
+function remembered(): Place | null {
   try {
-    return localStorage.getItem(STORAGE_KEY);
+    const p = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null");
+    return p && typeof p.lat === "number" && typeof p.lon === "number" && typeof p.name === "string" ? p : null;
   } catch {
     return null;
   }
 }
 
+/** Shows the place (the address bar) and remembers it for the next visit. */
 function savePlace(p: Place | null) {
+  const url = new URL(window.location.href);
+  for (const k of ["lat", "lon", "name"]) url.searchParams.delete(k);
+  if (p) {
+    url.searchParams.set("lat", p.lat.toFixed(5));
+    url.searchParams.set("lon", p.lon.toFixed(5));
+    if (!unnamed(p)) url.searchParams.set("name", p.name);
+  }
+  if (url.href !== window.location.href) window.history.replaceState(window.history.state, "", url);
   try {
     if (p) localStorage.setItem(STORAGE_KEY, JSON.stringify(p));
     else localStorage.removeItem(STORAGE_KEY);
   } catch {
-    // Storage unavailable (private mode); the choice just won't persist.
+    // Storage unavailable (private mode); the choice just won't be remembered.
   }
   listeners.forEach((cb) => cb());
 }
 
-function parsePlace(raw: string | null | undefined): Place | null | undefined {
-  if (raw === undefined || raw === null) return raw;
+/** Names a chosen point when the lookup returns, unless another place was chosen meanwhile. */
+async function nameSaved(p: Place, signal: AbortSignal) {
   try {
-    return JSON.parse(raw) as Place;
+    const named = await reverse(p.lat, p.lon, signal);
+    const cur = placeFromSearch(readSearch());
+    if (signal.aborted || !cur || cur.lat !== p.lat || cur.lon !== p.lon) return;
+    // Keep the exact point; the server rounds it.
+    const full = { ...p, name: named.name || p.name, address: named.address };
+    addRecent(full);
+    savePlace(full);
   } catch {
-    return null;
+    // Naming is best-effort; the coordinates already work.
   }
 }
 
@@ -61,9 +101,9 @@ type Result = { key: string; forecast: Forecast | null; error: string | null };
 
 export function Dashboard() {
   const { t } = useLocale();
-  const raw = useSyncExternalStore(subscribe, readRaw, () => undefined);
+  const search = useSyncExternalStore(subscribe, readSearch, () => undefined);
   /** null = nothing chosen yet; undefined = not hydrated yet. */
-  const place = useMemo(() => parsePlace(raw), [raw]);
+  const place = useMemo(() => (search === undefined ? undefined : placeFromSearch(search)), [search]);
   const [result, setResult] = useState<Result | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const naming = useRef<AbortController | null>(null);
@@ -153,32 +193,37 @@ export function Dashboard() {
     savePlace(p);
   };
 
-  /** A point from the map is used at once, then named when the lookup returns. */
-  const pickOnMap = async (pointLat: number, pointLon: number) => {
-    const round = (v: number) => Math.round(v * 1e5) / 1e5;
-    const p: Place = {
-      name: `${pointLat.toFixed(5)}, ${pointLon.toFixed(5)}`,
-      address: "",
-      lat: round(pointLat),
-      lon: round(pointLon),
-    };
+  /** Starts naming a point, dropping any naming still under way. */
+  const startNaming = (p: Place) => {
     naming.current?.abort();
     const ctrl = new AbortController();
     naming.current = ctrl;
-    select(p);
-    try {
-      const named = await reverse(p.lat, p.lon, ctrl.signal);
-      const cur = parsePlace(readRaw());
-      // Skip if another place was chosen meanwhile.
-      if (ctrl.signal.aborted || !cur || cur.lat !== p.lat || cur.lon !== p.lon) return;
-      // Keep the exact point; the server rounds it.
-      const full = { ...p, name: named.name || p.name, address: named.address };
-      addRecent(full);
-      select(full);
-    } catch {
-      // Naming is best-effort; the coordinates already work.
-    }
+    nameSaved(p, ctrl.signal);
   };
+
+  /** A point from the map is used at once, then named when the lookup returns. */
+  const pickOnMap = (pointLat: number, pointLon: number) => {
+    const p = pointPlace(pointLat, pointLon);
+    select(p);
+    startNaming(p);
+  };
+
+  // Opening a link with a place is like opening the page and choosing it in
+  // the search: it is remembered and added to the recent places (a bare point
+  // once it is named, like one picked on the map). Without one, the place
+  // remembered from the last visit is shown. Runs before the first paint, so
+  // the intro does not flash.
+  useLayoutEffect(() => {
+    const linked = placeFromSearch(readSearch());
+    if (!linked) {
+      const last = remembered();
+      if (last) savePlace(last);
+      return;
+    }
+    savePlace(linked);
+    if (unnamed(linked)) startNaming(linked);
+    else addRecent(linked);
+  }, []);
 
   /** Uses the browser's position like a point picked on the map. */
   const locate = () => {
