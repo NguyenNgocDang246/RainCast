@@ -15,6 +15,8 @@ const STORAGE_KEY = "raincast.place";
 const LOCATE_DEADLINE_MS = 30_000;
 /** A problem shown in the sheet: raised above the forecast's backdrop, which spills past the card. */
 const NOTICE = "relative z-10 text-sm text-amber-300";
+/** Attribution links in the footer: underlined so they read as links in the muted text. */
+const FOOTER_LINK = "underline underline-offset-2 hover:text-slate-400";
 
 // The chosen place lives in the address bar (?lat=…&lon=…&name=…), so the
 // page can be copied and shared, and is read through useSyncExternalStore so
@@ -295,27 +297,21 @@ export function Dashboard() {
         </div>
       </div>
 
-      <footer className="shrink-0 border-t border-slate-800 px-4 py-1.5 text-center text-xs text-slate-600">
-        Radar: RainViewer · {t.dashboard.footerAddress}:{" "}
-        <a
-          href="https://www.geoapify.com/"
-          className="hover:text-slate-400"
-          target="_blank"
-          rel="noreferrer"
-        >
+      <footer data-nosnippet className="shrink-0 border-t border-slate-800 px-4 py-1.5 text-center text-xs text-slate-600">
+        Radar:{" "}
+        <a href="https://www.rainviewer.com/" className={FOOTER_LINK} target="_blank" rel="noreferrer">
+          RainViewer
+        </a>{" "}
+        · {t.dashboard.footerAddress}:{" "}
+        <a href="https://www.geoapify.com/" className={FOOTER_LINK} target="_blank" rel="noreferrer">
           Geoapify
         </a>
         , ©{" "}
-        <a
-          href="https://www.openstreetmap.org/copyright"
-          className="hover:text-slate-400"
-          target="_blank"
-          rel="noreferrer"
-        >
+        <a href="https://www.openstreetmap.org/copyright" className={FOOTER_LINK} target="_blank" rel="noreferrer">
           OpenStreetMap
         </a>{" "}
         contributors ·{" "}
-        <a href="https://db-ip.com" className="hover:text-slate-400" target="_blank" rel="noreferrer">
+        <a href="https://db-ip.com" className={FOOTER_LINK} target="_blank" rel="noreferrer">
           IP Geolocation by DB-IP
         </a>
       </footer>

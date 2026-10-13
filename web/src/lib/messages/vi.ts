@@ -16,7 +16,8 @@ function lasting(text: string, n: number, clock: string, span: Span) {
 export const vi = {
   meta: {
     title: "Raincast – Khi nào trời mưa?",
-    description: "Khi nào trời mưa? Dự báo mưa 60 phút tới ở bất kỳ đâu.",
+    description:
+      "Dự báo mưa 60 phút tới ngay tại vị trí của bạn, từ radar thời tiết trực tiếp. Biết khi nào mưa bắt đầu, mưa to cỡ nào và khi nào tạnh.",
     adminTitle: "Raincast – Admin",
   },
   language: { label: "Ngôn ngữ" },
