@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"testing"
+	"time"
 )
 
 // open connects to a fresh schema of the database at
@@ -120,5 +121,75 @@ func TestMigrateFromV1(t *testing.T) {
 		WHERE table_schema = current_schema() AND table_name = 'frames' AND column_name = 'recorded_at'`).Scan(&col)
 	if left != 0 || col != 0 {
 		t.Fatalf("%d old tables and %d old columns left", left, col)
+	}
+}
+
+func TestBench(t *testing.T) {
+	st := open(t)
+	ctx := context.Background()
+	rows := []BenchForecast{
+		{Provider: "rainbow", Station: "q1", Issued: 600, Valid: 600, MMH: 1.5, Kind: "minutely"},
+		{Provider: "rainbow", Station: "q1", Issued: 600, Valid: 1200, MMH: 2, Kind: "minutely"},
+		{Provider: "rainbow", Station: "q1", Issued: 1200, Valid: 1200, MMH: 3, Kind: "minutely"},
+		{Provider: "tomorrow", Station: "q1", Issued: 600, Valid: 1200, MMH: 0, Kind: "hourly"},
+	}
+	for range 2 { // a repeat is kept once
+		if err := st.InsertBenchForecasts(ctx, rows); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.BenchForecasts(ctx, 1200)
+	if err != nil || len(got) != 3 || got[0].Issued != 600 || got[2].MMH != 3 {
+		t.Fatalf("forecasts = %+v %v", got, err)
+	}
+	if n, err := st.BenchCalls(ctx, "rainbow", time.Unix(0, 0)); err != nil || n != 2 {
+		t.Fatalf("calls = %d %v", n, err)
+	}
+	if err := st.RecordBenchObs(ctx, BenchObs{Station: "q1", Frame: 600, DBZ: 35}); err != nil {
+		t.Fatal(err)
+	}
+	obs, err := st.BenchObservations(ctx, 0)
+	if err != nil || len(obs) != 1 || obs[0].DBZ != 35 {
+		t.Fatalf("obs = %+v %v", obs, err)
+	}
+	reps := []BenchMetar{
+		{Station: "VTBS", Obs: 600, Rain: false, Raw: "METAR VTBS 9999"},
+		{Station: "VTBS", Obs: 2400, Rain: true, Raw: "METAR VTBS -RA"},
+	}
+	for range 2 {
+		if err := st.InsertBenchMetar(ctx, reps); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m, err := st.BenchMetars(ctx, 1000)
+	if err != nil || len(m) != 1 || !m[0].Rain || m[0].Obs != 2400 {
+		t.Fatalf("metar = %+v %v", m, err)
+	}
+}
+
+// Schema 2 keeps its frames and regions and gains the benchmark tables.
+func TestMigrateFromV2(t *testing.T) {
+	dsn := TestDSN(t)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, stmt := range append(schema[:2:2],
+		`CREATE TABLE schema_version (version INTEGER NOT NULL)`,
+		`INSERT INTO schema_version VALUES (2)`,
+		`INSERT INTO frames VALUES (600, '/a')`,
+	) {
+		if _, err := db.Exec(stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := openAt(t, dsn)
+	ctx := context.Background()
+	if f, err := s.FrameList(ctx, 0); err != nil || len(f) != 1 {
+		t.Fatalf("frames = %+v %v", f, err)
+	}
+	if err := s.RecordBenchObs(ctx, BenchObs{Station: "q1", Frame: 600, DBZ: 20}); err != nil {
+		t.Fatal(err)
 	}
 }

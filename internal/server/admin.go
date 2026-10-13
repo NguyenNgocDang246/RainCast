@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"raincast/internal/backtest"
+	"raincast/internal/bench"
 	"raincast/internal/geocode"
 	"raincast/internal/pipeline"
 	"raincast/internal/store"
@@ -22,6 +23,46 @@ func (s *Server) routeAdmin(mux *http.ServeMux) {
 	h("GET /api/admin/forecast", s.adminForecast)
 	h("GET /api/admin/radar.png", s.radarPNG)
 	h("GET /api/admin/backtest", s.backtestStatus)
+	h("GET /api/admin/benchmark", s.benchmark)
+}
+
+// BenchmarkResponse is the body of GET /api/admin/benchmark.
+type BenchmarkResponse struct {
+	Report *bench.Report `json:"report"` // null without a database
+}
+
+// benchmark scores what cmd/benchmark recorded over the last ?days=
+// (default 7).
+func (s *Server) benchmark(w http.ResponseWriter, r *http.Request) {
+	var resp BenchmarkResponse
+	if s.store != nil {
+		days, err := strconv.Atoi(r.URL.Query().Get("days"))
+		if err != nil || days <= 0 {
+			days = 7
+		}
+		now := time.Now()
+		since := now.Add(-time.Duration(min(days, 90)) * 24 * time.Hour).Unix()
+		// Issues reach back a horizon before the first scored time.
+		from := since - int64(bench.Horizon/time.Second)
+		fc, err := s.store.BenchForecasts(r.Context(), from)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		obs, err := s.store.BenchObservations(r.Context(), from)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		metars, err := s.store.BenchMetars(r.Context(), from)
+		if err != nil {
+			s.fail(w, err)
+			return
+		}
+		rep := bench.Score(fc, obs, metars, now)
+		resp.Report = &rep
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // BacktestResponse is the body of GET /api/admin/backtest.

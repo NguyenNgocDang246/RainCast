@@ -10,6 +10,8 @@ export type Scores = {
   pod: number | null;
   far: number | null;
   csi: number | null;
+  /** F-score: 2·hits / (2·hits + misses + false alarms). */
+  f1: number | null;
 };
 
 export type Overview = {
@@ -123,6 +125,41 @@ export type BacktestReport = {
 
 /** GET /api/admin/backtest: the report `go run ./cmd/backtest` last wrote. */
 export type BacktestStatus = { report: BacktestReport | null };
+
+export type BenchmarkCell = { lead_min: number; scores: Scores; mae_mm_h: number | null };
+
+export type BenchmarkRow = {
+  forecaster: string;
+  /** The truth source's own value at issue time, kept. */
+  persistence?: boolean;
+  leads: BenchmarkCell[];
+  overall: Scores;
+  mae_mm_h: number | null;
+};
+
+export type BenchmarkReport = {
+  generated_at: string;
+  /** Unix seconds; 0 when nothing could be scored yet. */
+  from: number;
+  to: number;
+  stations: string[];
+  threshold_mm_h: number;
+  leads: number[];
+  providers: { name: string; issues: number; last_issued: number; kinds: Record<string, number> }[];
+  /** One per truth source: metar, rainviewer, tomorrow, rainbow. */
+  tables: BenchmarkTable[];
+};
+
+export type BenchmarkTable = {
+  truth: string;
+  /** Forecast rate counted as rain: 0.5 against METAR, 20 dBZ against the others. */
+  threshold_mm_h: number;
+  times: number;
+  rows: BenchmarkRow[];
+};
+
+/** GET /api/admin/benchmark: what `go run ./cmd/benchmark` recorded, scored. */
+export type BenchmarkStatus = { report: BenchmarkReport | null };
 
 /** Rain events below which the backtest cannot tell methods apart (backtest.MinEvents). */
 export const MIN_EVENTS = 30;

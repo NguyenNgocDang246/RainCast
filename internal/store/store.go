@@ -1,6 +1,7 @@
 // Package store keeps what cmd/collect gathers for the backtest in
-// PostgreSQL: the radar frames recorded and the regions collected. The
-// database runs next to the collector; the public API needs none.
+// PostgreSQL: the radar frames recorded and the regions collected; and what
+// cmd/benchmark records from other forecast providers. The database runs
+// next to the collector; the public API needs none.
 package store
 
 import (
@@ -16,7 +17,7 @@ import (
 )
 
 // schemaVersion is stored in the schema_version table.
-const schemaVersion = 2
+const schemaVersion = 4
 
 // migrationLock serializes migrations between processes (the collector and
 // the backtest may start together).
@@ -38,6 +39,29 @@ var schema = []string{
 		first_seen   BIGINT           NOT NULL,
 		last_active  BIGINT           NOT NULL,
 		PRIMARY KEY (tile_x, tile_y)
+	)`,
+	`CREATE TABLE IF NOT EXISTS bench_forecasts (
+		provider   TEXT   NOT NULL,
+		station    TEXT   NOT NULL,
+		issued_at  BIGINT NOT NULL,
+		valid_at   BIGINT NOT NULL,
+		mm_h       REAL   NOT NULL,
+		kind       TEXT   NOT NULL,
+		PRIMARY KEY (provider, station, issued_at, valid_at)
+	)`,
+	`CREATE INDEX IF NOT EXISTS bench_forecasts_valid ON bench_forecasts (valid_at)`,
+	`CREATE TABLE IF NOT EXISTS bench_obs (
+		station  TEXT   NOT NULL,
+		frame    BIGINT NOT NULL,
+		dbz      REAL   NOT NULL,
+		PRIMARY KEY (station, frame)
+	)`,
+	`CREATE TABLE IF NOT EXISTS bench_metar (
+		station   TEXT    NOT NULL,
+		obs_time  BIGINT  NOT NULL,
+		rain      BOOLEAN NOT NULL,
+		raw       TEXT    NOT NULL,
+		PRIMARY KEY (station, obs_time)
 	)`,
 }
 

@@ -13,6 +13,7 @@ type Scores struct {
 	POD         *float64 `json:"pod"` // probability of detection
 	FAR         *float64 `json:"far"` // false alarm ratio
 	CSI         *float64 `json:"csi"` // critical success index
+	F1          *float64 `json:"f1"`  // F-score: harmonic mean of POD and 1 − FAR
 }
 
 // Add records one forecast/observation pair.
@@ -60,6 +61,7 @@ func (s *Scores) Compute() {
 	s.POD = ratio(s.Hits, s.Hits+s.Misses)
 	s.FAR = ratio(s.FalseAlarms, s.Hits+s.FalseAlarms)
 	s.CSI = ratio(s.Hits, s.Hits+s.Misses+s.FalseAlarms)
+	s.F1 = ratio(2*s.Hits, 2*s.Hits+s.Misses+s.FalseAlarms)
 }
 
 func ratio(a, b int) *float64 {

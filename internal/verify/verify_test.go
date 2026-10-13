@@ -29,13 +29,14 @@ func TestScores(t *testing.T) {
 	approx(t, "pod", s.POD, 0.75)
 	approx(t, "far", s.FAR, 0.4)
 	approx(t, "csi", s.CSI, 0.5)
+	approx(t, "f1", s.F1, 2.0/3)
 }
 
 func TestScoresUndefined(t *testing.T) {
 	var s Scores
 	s.Add(false, false)
 	s.Compute()
-	if s.POD != nil || s.FAR != nil || s.CSI != nil {
+	if s.POD != nil || s.FAR != nil || s.CSI != nil || s.F1 != nil {
 		t.Fatalf("expected nil scores, got %+v", s)
 	}
 	approx(t, "accuracy", s.Accuracy, 1)

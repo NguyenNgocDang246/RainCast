@@ -1,28 +1,31 @@
 # Lệnh và tham số
 
-RainCast có ba chương trình, đều chạy từ thư mục gốc repo:
+RainCast có các chương trình sau, đều chạy từ thư mục gốc repo:
 
 | Lệnh | Việc |
 |---|---|
 | `go run ./cmd/raincast` | Server HTTP: dự báo mưa cho một vị trí, trang admin |
 | `go run ./cmd/collect` | Thu radar các vùng đang mưa trên thế giới để backtest |
 | `go run ./cmd/backtest` | Chấm điểm các phương pháp dự báo trên dữ liệu collect đã thu |
+| `go run ./cmd/benchmark` | Thu dự báo của RainCast và đối thủ (Tomorrow.io, Rainbow.ai) để so sánh |
 
-Cả ba đọc `.env` khi khởi động. Xem đầy đủ tham số của một lệnh bằng `-h`, ví dụ `go run ./cmd/backtest -h`.
+Tất cả đọc `.env` khi khởi động. Xem đầy đủ tham số của một lệnh bằng `-h`, ví dụ `go run ./cmd/backtest -h`.
 
 ## Biến môi trường
 
 | Biến | Dùng bởi | Ý nghĩa |
 |---|---|---|
-| `DATABASE_URL` | cả ba | PostgreSQL chung: danh sách frame và vùng collect đã thu |
+| `DATABASE_URL` | raincast, collect, backtest, benchmark | PostgreSQL chung: danh sách frame và vùng collect đã thu |
 | `REDIS_URL` | raincast | Redis cache dự báo giữa các tiến trình |
 | `GEOAPIFY_KEY` | raincast | Khoá Geoapify cho tìm địa chỉ và bản đồ |
 | `CORS_ORIGIN` | raincast | Origin được phép gọi API |
 | `APP_ENV` | raincast | `production` (hoặc `prod`) bật chế độ chạy thật |
+| `TOMORROW_API_KEY` | benchmark | Khoá Tomorrow.io ([lấy ở đây](https://app.tomorrow.io/development/keys)); trống thì bỏ qua Tomorrow.io |
+| `RAINBOW_API_TOKEN` | benchmark | Token Rainbow.ai (trang profile ở [developer.rainbow.ai](https://developer.rainbow.ai)); trống thì bỏ qua Rainbow.ai |
 
 ## Giới hạn tài nguyên (guard)
 
-Cả ba lệnh có chung bộ tham số này: vượt giới hạn là tiến trình tự dừng, để không làm treo máy.
+Các lệnh có chung bộ tham số này: vượt giới hạn là tiến trình tự dừng, để không làm treo máy.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -180,6 +183,58 @@ go run ./cmd/backtest -inventory
 go run ./cmd/backtest -prune
 go run ./cmd/backtest -prune -yes
 ```
+
+## benchmark
+
+So RainCast với đối thủ. Cứ đúng mỗi mốc 10 phút (vài giây sau :00, :10, …), lệnh hỏi cùng lúc RainCast, Tomorrow.io và Rainbow.ai dự báo mưa 60 phút tới tại sân bay Suvarnabhumi (Bangkok), và tải METAR của sân bay, ghi vào PostgreSQL (bảng `bench_forecasts`, `bench_obs`, `bench_metar`). Tab **So sánh** ở trang admin chấm điểm trên dữ liệu đó (7, 30 hoặc 90 ngày gần nhất).
+
+```powershell
+go run ./cmd/benchmark
+```
+
+| Tham số | Mặc định | Ý nghĩa |
+|---|---|---|
+| `-database-url` | `$DATABASE_URL` | PostgreSQL, dùng chung với collect |
+| `-stations` | Sân bay Suvarnabhumi (`VTBS`) | File JSON các trạm `[{"id","name","lat","lon"}]`. `id` là mã ICAO (4 chữ in hoa, ví dụ `VTBD`) thì trạm được chấm thêm bằng METAR của sân bay đó. Mỗi trạm tốn mỗi nhà cung cấp 1 lần gọi / 10 phút |
+| `-tomorrow-key` | `$TOMORROW_API_KEY` | Khoá Tomorrow.io (trống: bỏ qua) |
+| `-rainbow-token` | `$RAINBOW_API_TOKEN` | Token Rainbow.ai (trống: bỏ qua) |
+| `-rainbow-monthly` | 4800 | Số lần gọi Rainbow.ai tối đa mỗi tháng (UTC), đếm cả trước khi khởi động lại; gói free có 5.000 |
+| `-rate-limit` | 30 | Số request RainViewer mỗi phút. Tổng với raincast và collect cùng IP phải dưới 100 |
+| `-cache` | `data/tiles-bench` | Thư mục tile radar cho dự báo của RainCast |
+| `-ml` | bật | Hiệu chỉnh ML như app |
+| `-debug` | tắt | Log chi tiết |
+
+Cùng các tham số [guard](#giới-hạn-tài-nguyên-guard).
+
+**Vì sao Bangkok:** Nowcast API của Rainbow.ai không phủ Việt Nam (TP.HCM trả 404). Bangkok cùng khí hậu nhiệt đới gió mùa và có đủ cả ba nguồn: Rainbow.ai, Tomorrow.io (từng phút) và radar RainViewer. Các nơi nhiệt đới khác cũng có đủ: Kuala Lumpur, Singapore, Hong Kong, Darwin, Panama City, San Juan.
+
+**Hạn mức gói free** với 1 trạm: Tomorrow.io 144 lần/ngày khi có dự báo từng phút, 288 khi không (giới hạn 500/ngày, 25/giờ); Rainbow.ai ~4.300 lần/tháng. Gặp 429 thì nhà cung cấp đó tạm dừng theo `Retry-After` (không có thì 1 giờ). Thêm trạm thì cần gói trả phí.
+
+**Nếu gói Tomorrow.io không có dự báo từng phút** (tài liệu ghi là chỉ cho gói trả phí, nhưng thực tế key free vẫn nhận được), thì "hiện tại" lấy từ API realtime (thêm 1 lần gọi), các lead 10–60′ nội suy từ dự báo theo giờ, và trang admin cảnh báo rằng điểm của Tomorrow thấp hơn khả năng thật của họ.
+
+**Bảng METAR (như weatherindex.ai).** METAR lấy từ [aviationweather.gov](https://aviationweather.gov/data/api/), không cần khoá. Cách chấm giống bảng xếp hạng của weatherindex.ai, để so được với Rainbow, AccuWeather, Vaisala trên đó:
+
+| Tham số | Giá trị |
+|---|---|
+| Bài toán | Mưa / không mưa tại 1 điểm, 1 thời điểm |
+| Ngưỡng "có mưa" | Dự báo ≥ 0,5 mm/h (≈ 20 dBZ) |
+| Sự thật | METAR sân bay: có giáng thuỷ tại sân bay (RA, DZ, SHRA, TSRA…; VCSH, TS không mưa thì không tính) |
+| Mốc dự báo | Mỗi 10 phút, tới 60′ (10 … 60′), tính từ lúc gọi; weatherindex.ai chấm tới 180′ nhưng xếp hạng ở 60′ |
+| Mốc xếp hạng | F-score ở 60′ |
+| Ghép dự báo ↔ quan trắc | METAR gần nhất trong ±10′ của mốc |
+| Cửa sổ | 7 / 30 / 90 ngày gần nhất (rolling) |
+| Không gian | Toạ độ sân bay Suvarnabhumi |
+
+Chỉ chấm 1 nơi: sân bay Suvarnabhumi (`VTBS`). RainCast chạy dự báo tới 90′ sau khung radar, để đủ 60′ tính từ lúc gọi. METAR ở Bangkok ra mỗi 30 phút, nên cần vài tuần mùa mưa mới đủ mẫu.
+
+**Các bảng còn lại.** Ngoài METAR, "sự thật" là giá trị "hiện tại" mỗi nguồn công bố khi tới thời điểm đó: với Tomorrow.io và Rainbow.ai là giá trị phút 0 của lần gọi đúng lúc ấy, với RainCast là khung radar RainViewer. Mỗi nguồn sự thật là một bảng (RainViewer, Tomorrow.io, Rainbow.ai), trong mỗi bảng chấm mọi nguồn dự báo cùng một dòng "giữ nguyên" làm mốc:
+
+- Lead tính từ lúc gọi, không phải từ khung radar: độ trễ công bố của RainViewer bị tính vào RainCast, đúng như người dùng thấy. Vì vậy lệnh chạy dự báo RainCast tới 90 phút sau khung radar, để đủ lead 60′ tính từ lúc gọi.
+- Mưa khi ≥ 0,65 mm/h (20 dBZ, cùng ngưỡng app) cho mọi nguồn. Ô là F-score (di chuột xem CSI); MAE tính bằng mm/h.
+- Mỗi bảng chỉ chấm các mẫu (trạm, thời điểm, lead) mà mọi nguồn đều có dữ liệu, để các dòng so được với nhau.
+- Nguồn nào cũng có lợi trong bảng sự thật của chính mình; bảng RainViewer độc lập với hai đối thủ nhưng không với RainCast; chỉ bảng METAR độc lập với mọi nguồn.
+
+Cần chạy liên tục ít nhất ~70 phút mới có lead 60′, và vài tuần có mưa mới đủ mẫu để so sánh.
 
 ## satfill
 

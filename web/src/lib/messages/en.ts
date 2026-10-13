@@ -129,6 +129,7 @@ export const en: Dict = {
     tabs: {
       overview: "Overview",
       backtest: "Backtest",
+      benchmark: "Benchmark",
       frames: "Radar frames",
       tools: "Tools",
     },
@@ -231,6 +232,28 @@ export const en: Dict = {
       worse: "surely worse",
       intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
       note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
+    },
+
+    benchmark: {
+      title: "Against competitors (METAR, as on weatherindex.ai)",
+      howToRun: "record: go run ./cmd/benchmark",
+      days: (n) => `${n} days`,
+      noDatabase: "No database connected (DATABASE_URL).",
+      never: "No data yet. Run go run ./cmd/benchmark (needs TOMORROW_API_KEY and RAINBOW_API_TOKEN in .env); lead 60′ needs about 70 minutes.",
+      noMetar: "No sample matched to a METAR that every source has data for yet.",
+      summary: (from, to, station, n) => `${from} → ${to} · ${station} · ${n} samples per lead`,
+      last: (at) => `last call ${at}`,
+      stale: "stopped?",
+      hourlyWarning:
+        "Tomorrow.io is on the free plan (no minute-by-minute forecast): leads 10–60′ are interpolated from hourly forecasts, so Tomorrow scores below what it can really do.",
+      rankTitle: "Ranking: F-score at 60′",
+      chartTitle: "F-score by lead",
+      chartX: "Lead, minutes",
+      forecaster: "Forecast",
+      persistence: "Persistence (baseline)",
+      names: { raincast: "RainCast", tomorrow: "Tomorrow.io", rainbow: "Rainbow.ai" },
+      note: "Truth: airport METAR, each 10′ time matched to the nearest report within ±10′ (METAR comes at :00, :30 and when the weather changes). A forecast ≥ 0.5 mm/h is rain; leads count from the call. Only samples every source has are scored. Hover a cell for POD/FAR.",
+      cellTitle: (pod, far, n) => `POD ${pod} · FAR ${far} · ${n} samples`,
     },
 
     history: {

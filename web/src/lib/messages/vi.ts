@@ -156,6 +156,7 @@ export const vi = {
     tabs: {
       overview: "Tổng quan",
       backtest: "Backtest",
+      benchmark: "So sánh",
       frames: "Khung radar",
       tools: "Công cụ",
     },
@@ -260,6 +261,28 @@ export const vi = {
       worse: "chắc chắn kém hơn",
       intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
       note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
+    },
+
+    benchmark: {
+      title: "So với đối thủ (METAR, như weatherindex.ai)",
+      howToRun: "thu: go run ./cmd/benchmark",
+      days: (n: number) => `${n} ngày`,
+      noDatabase: "Chưa nối database (DATABASE_URL).",
+      never: "Chưa có dữ liệu. Chạy go run ./cmd/benchmark (cần TOMORROW_API_KEY, RAINBOW_API_TOKEN trong .env); sau ~70 phút mới có đủ lead 60′.",
+      noMetar: "Chưa có mẫu nào ghép được với METAR mà mọi nguồn đều có dữ liệu.",
+      summary: (from: string, to: string, station: string, n: number) => `${from} → ${to} · ${station} · ${n} mẫu mỗi lead`,
+      last: (at: string) => `gọi gần nhất ${at}`,
+      stale: "đã ngừng?",
+      hourlyWarning:
+        "Tomorrow.io đang ở gói free (không có dự báo từng phút): lead 10–60′ là nội suy dự báo theo giờ, nên điểm của Tomorrow thấp hơn khả năng thật của họ.",
+      rankTitle: "Xếp hạng: F-score ở 60′",
+      chartTitle: "F-score theo lead",
+      chartX: "Lead, phút",
+      forecaster: "Dự báo",
+      persistence: "Giữ nguyên (mốc so sánh)",
+      names: { raincast: "RainCast", tomorrow: "Tomorrow.io", rainbow: "Rainbow.ai" } as Record<string, string>,
+      note: "Sự thật: METAR sân bay, mốc 10′ ghép với bản tin gần nhất trong ±10′ (METAR ra :00, :30 và khi thời tiết đổi). Dự báo ≥ 0,5 mm/h là mưa; lead tính từ lúc gọi. Chỉ chấm mẫu mà mọi nguồn đều có. Di chuột vào ô để xem POD/FAR.",
+      cellTitle: (pod: string, far: string, n: number) => `POD ${pod} · FAR ${far} · ${n} mẫu`,
     },
 
     history: {
