@@ -12,7 +12,8 @@ function lasting(text: string, n: number, clock: string, span: Span) {
 export const en: Dict = {
   meta: {
     title: "Raincast – How long until it rains?",
-    description: "How long until it rains? A rain forecast for the next 60 minutes, anywhere.",
+    description:
+      "Rain forecast for the next 60 minutes at your exact location, from live weather radar. See when rain starts, how heavy it gets and when it stops.",
     adminTitle: "Raincast – Admin",
   },
   language: { label: "Language" },
