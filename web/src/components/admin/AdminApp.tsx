@@ -4,11 +4,10 @@ import { useState } from "react";
 import { useLocale } from "@/lib/i18n";
 import { LanguageSwitch } from "../LanguageSwitch";
 import { BacktestPanel } from "./BacktestPanel";
-import { FramesTab } from "./HistoryTabs";
 import { OverviewTab } from "./OverviewTab";
 import { ToolsTab } from "./ToolsTab";
 
-const TABS = ["overview", "backtest", "frames", "tools"] as const;
+const TABS = ["overview", "backtest", "tools"] as const;
 type Tab = (typeof TABS)[number];
 
 export function AdminApp() {
@@ -39,7 +38,6 @@ export function AdminApp() {
 
       {tab === "overview" && <OverviewTab />}
       {tab === "backtest" && <BacktestPanel />}
-      {tab === "frames" && <FramesTab />}
       {tab === "tools" && <ToolsTab initial={null} />}
     </main>
   );

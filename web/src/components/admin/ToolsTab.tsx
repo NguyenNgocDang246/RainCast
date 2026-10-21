@@ -155,39 +155,34 @@ function ForecastDetail({ f }: { f: Forecast }) {
               : tt.noMotion
           }
         />
-        {f.motion_coherence !== undefined && <Row k={tt.coherence} v={f.motion_coherence.toFixed(2)} />}
-        <Row k={tt.gain} v={f.motion_gain !== undefined ? f.motion_gain.toFixed(2) : "—"} />
-        {f.motion_members?.map((m) => (
-          <Row
-            key={m.method}
-            k={tt.member(m.method)}
-            v={tt.motionValue(m.speed_kmh.toFixed(1), compass(m.direction_deg, locale), m.direction_deg.toFixed(0))}
-          />
-        ))}
         <Row k={tt.threshold} v={tt.thresholdValue(f.threshold_dbz, f.heavy_dbz)} />
+        {f.ml_delta && <Row k={tt.mlDelta} v={mlDelta(f.ml_delta)} />}
       </dl>
-      <div className="max-h-72 overflow-y-auto">
-        <table className="w-full">
-          <thead className="sticky top-0 bg-slate-900">
-            <tr className="border-b border-slate-800">
-              <th className={th}>{tt.minuteFromFrame}</th>
-              <th className={th}>{tt.predictedDbz}</th>
-            </tr>
-          </thead>
-          <tbody>
-            {f.series
-              .filter((p) => p.minute % 5 === 0)
-              .map((p) => (
-                <tr key={p.minute} className="border-b border-slate-800/60">
-                  <td className={td}>+{p.minute}</td>
-                  <td className={td}>{dbz(p.dbz)}</td>
-                </tr>
-              ))}
-          </tbody>
-        </table>
-      </div>
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-slate-800">
+            <th className={th}>{tt.minuteFromFrame}</th>
+            <th className={th}>{tt.predictedDbz}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {f.series
+            .filter((p) => p.minute % 10 === 0)
+            .map((p) => (
+              <tr key={p.minute} className="border-b border-slate-800/60">
+                <td className={td}>+{p.minute}</td>
+                <td className={td}>{dbz(p.dbz)}</td>
+              </tr>
+            ))}
+        </tbody>
+      </table>
     </div>
   );
+}
+
+/** "+10′ +8.0 · +20′ +6.0 · …": the ML layer's change at each lead (ml.Leads, every 10 minutes). */
+function mlDelta(delta: number[]) {
+  return delta.map((d, i) => `+${(i + 1) * 10}′ ${d > 0 ? "+" : ""}${d.toFixed(1)}`).join(" · ");
 }
 
 function Row({ k, v }: { k: string; v: string }) {

@@ -129,7 +129,6 @@ export const en: Dict = {
     tabs: {
       overview: "Overview",
       backtest: "Backtest",
-      frames: "Radar frames",
       tools: "Tools",
     },
 
@@ -158,19 +157,6 @@ export const en: Dict = {
       forOnDemand: "for on-demand forecasts",
       stations: (n, names, since) => `Default location: ${names.split(", ")[0]} · ${n} preset places · running since ${since}`,
       lastError: "Last poll error:",
-
-      stored: "Collected data (cmd/collect)",
-      frames: "Radar frames",
-      regions: "Regions tracked",
-      noDatabase: "No database connected (DATABASE_URL)",
-
-      geocoding: (on) => `Geoapify (since start) · ${on ? "key set" : "no key"}`,
-      cacheHits: "Served from cache",
-      failed: "Failed",
-      rateLimited: (n) => `${n} rate-limited`,
-      tiles: "Map tiles fetched",
-      tilesSub: (cached, errors) => `${cached} from cache · ${errors} errors`,
-
     },
 
     backtest: {
@@ -225,19 +211,11 @@ export const en: Dict = {
       delta: "Δ vs TREC 4 pairs",
       bss: "BSS",
       auc: "AUC",
-      accum: "mm/h ±",
-      ms: "ms/run",
+      details: "Details: by kind of rain, FSS, climate groups",
       better: "surely better",
       worse: "surely worse",
       intervals: (blocks) => `95% intervals from ${blocks} six-hour blocks.`,
-      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). mm/h ±: mean error of the hour's rain total against radar (lower is better). ms/run: rough compute time. “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
-    },
-
-    history: {
-      framesTitle: (n) => `Recorded radar frames (latest ${n})`,
-      frameTime: "Frame time",
-      path: "Tile path",
-      noFrames: "No frames yet (or no database connected).",
+      note: "Δ: CSI difference from TREC 4 pairs (what the app serves); ▲/▼ when the whole interval is above/below 0, so the difference is not chance. BSS: probability skill over persistence (0 = no better, closer to 1 is better). AUC: how well rain is told from no rain (0.5 = guessing, 1 = perfect). “+ trend” adds rain growing or weakening. Every setting is scored on the same times and points (only where radar covers); scores add up across runs.",
     },
 
     tools: {
@@ -259,11 +237,9 @@ export const en: Dict = {
       motion: "Motion",
       motionValue: (kmh, dir, deg) => `${kmh} km/h heading ${dir} (${deg}°)`,
       noMotion: "not enough data",
-      coherence: "Member agreement",
-      gain: "Motion explains radar",
-      member: (method) => `${method.toUpperCase()} motion`,
       threshold: "Thresholds",
       thresholdValue: (rain, heavy) => `rain ≥ ${rain} dBZ · heavy ≥ ${heavy} dBZ`,
+      mlDelta: "ML change (dBZ)",
       minuteFromFrame: "Minute (from frame)",
       predictedDbz: "Predicted dBZ",
     },
