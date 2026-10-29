@@ -18,7 +18,6 @@ export function BacktestPanel() {
   const report = status?.report ?? null;
 
   const results = report?.results ?? [];
-  const leads = results[0]?.leads.map((l) => l.lead_min) ?? [];
   // Reports saved before method/pairs/trend/baseline existed only have the
   // Vietnamese name ("4 cặp + xu hướng"); the baseline is always row 0.
   const label = (r: BacktestResult, i: number) => {
@@ -77,21 +76,14 @@ export function BacktestPanel() {
             </p>
           )}
           <div className="overflow-x-auto">
-            <table className="w-full min-w-270 text-sm">
+            <table className="w-full min-w-160 text-sm">
               <thead>
                 <tr className="border-b border-slate-800">
                   <th className={th}>{b.config}</th>
-                  {leads.map((l) => (
-                    <th key={l} className={th}>
-                      CSI +{l}′
-                    </th>
-                  ))}
                   <th className={th}>{b.csiCi}</th>
                   <th className={th}>{b.delta}</th>
                   <th className={th}>{b.bss}</th>
                   <th className={th}>{b.auc}</th>
-                  <th className={th}>{b.accum}</th>
-                  <th className={th}>{b.ms}</th>
                 </tr>
               </thead>
               <tbody>
@@ -107,11 +99,6 @@ export function BacktestPanel() {
                           <span className="ml-2 text-xs font-normal text-sky-400">{b.best}</span>
                         )}
                       </td>
-                      {r.leads.map((l) => (
-                        <td key={l.lead_min} className={td}>
-                          {pct(l.scores.csi)}
-                        </td>
-                      ))}
                       <td
                         className={`${td} whitespace-nowrap ${top ? "font-semibold text-slate-50" : ""}`}
                       >
@@ -123,156 +110,157 @@ export function BacktestPanel() {
                       </td>
                       <td className={td}>{num(r.bss)}</td>
                       <td className={td}>{num(r.auc)}</td>
-                      <td className={td}>{num(r.accum_mae_mm)}</td>
-                      <td className={td}>
-                        {r.ms_per_issue == null ? "–" : Math.round(r.ms_per_issue)}
-                      </td>
                     </tr>
                   );
                 })}
               </tbody>
             </table>
           </div>
-          {(results[0]?.classes?.length ?? 0) > 0 && (
-            <>
-              <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.classes}</h3>
-              <p className="mb-2 text-xs text-slate-500">{b.classesNote}</p>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-270 text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-800">
-                      <th className={th}>{b.config}</th>
-                      {results[0].classes!.map((c) => (
-                        <th key={c.class} className={th}>
-                          {b.classLabel(c.lo, c.hi) ?? c.class}
-                          <span className="block text-xs font-normal text-slate-500">
-                            {b.observed(
-                              Math.max(
-                                ...results.map(
-                                  (r) => r.classes?.find((x) => x.class === c.class)?.observed ?? 0,
+          <details className="mt-6">
+            <summary className="cursor-pointer text-xs font-semibold text-slate-400 hover:text-slate-200">
+              {b.details}
+            </summary>
+            {(results[0]?.classes?.length ?? 0) > 0 && (
+              <>
+                <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.classes}</h3>
+                <p className="mb-2 text-xs text-slate-500">{b.classesNote}</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-270 text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800">
+                        <th className={th}>{b.config}</th>
+                        {results[0].classes!.map((c) => (
+                          <th key={c.class} className={th}>
+                            {b.classLabel(c.lo, c.hi) ?? c.class}
+                            <span className="block text-xs font-normal text-slate-500">
+                              {b.observed(
+                                Math.max(
+                                  ...results.map(
+                                    (r) => r.classes?.find((x) => x.class === c.class)?.observed ?? 0,
+                                  ),
                                 ),
-                              ),
-                            )}
-                          </span>
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.map((r, i) => (
-                      <tr key={r.name} className="border-b border-slate-800/60">
-                        <td className={`${td} text-slate-100`}>{label(r, i)}</td>
-                        {(r.classes ?? []).map((c) => (
-                          <td key={c.class} className={`${td} whitespace-nowrap`}>
-                            {pct(c.overall.csi)}
-                            {c.delta_csi != null && (
-                              <span className="ml-2 text-xs text-slate-400">
-                                <Delta r={c} better={b.better} worse={b.worse} />
-                              </span>
-                            )}
-                          </td>
+                              )}
+                            </span>
+                          </th>
                         ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-          {fss.length > 0 && (
-            <>
-              <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.fss}</h3>
-              <p className="mb-2 text-xs text-slate-500">{b.fssNote}</p>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-270 text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-800">
-                      <th className={th} rowSpan={2}>
-                        {b.config}
-                      </th>
-                      {fssThresholds.map((thr) => (
-                        <th
-                          key={thr}
-                          className={th}
-                          colSpan={fss.filter((f) => f.threshold === thr).length}
-                        >
-                          {b.fssThreshold(thr)}
-                        </th>
-                      ))}
-                    </tr>
-                    <tr className="border-b border-slate-800">
-                      {fss.map((f) => (
-                        <th key={`${f.threshold}-${f.window}`} className={`${th} font-normal`}>
-                          {b.fssWindow(f.window_km)}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {results.map((r, i) => (
-                      <tr key={r.name} className="border-b border-slate-800/60">
-                        <td className={`${td} text-slate-100`}>{label(r, i)}</td>
-                        {fss.map((f) => {
-                          const s = r.fss?.find(
-                            (x) => x.threshold === f.threshold && x.window === f.window,
-                          );
-                          return (
-                            <td key={`${f.threshold}-${f.window}`} className={`${td} whitespace-nowrap`}>
-                              {num(s?.overall)}
-                              {s?.delta_fss != null && (
-                                <span className="ml-1 text-xs text-slate-500">{signed(s.delta_fss)}</span>
+                    </thead>
+                    <tbody>
+                      {results.map((r, i) => (
+                        <tr key={r.name} className="border-b border-slate-800/60">
+                          <td className={`${td} text-slate-100`}>{label(r, i)}</td>
+                          {(r.classes ?? []).map((c) => (
+                            <td key={c.class} className={`${td} whitespace-nowrap`}>
+                              {pct(c.overall.csi)}
+                              {c.delta_csi != null && (
+                                <span className="ml-2 text-xs text-slate-400">
+                                  <Delta r={c} better={b.better} worse={b.worse} />
+                                </span>
                               )}
                             </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-          {report.groups && report.groups.length > 1 && (
-            <>
-              <h3 className="mt-6 mb-2 text-xs font-semibold text-slate-400">{b.groups}</h3>
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-140 text-sm">
-                  <thead>
-                    <tr className="border-b border-slate-800">
-                      <th className={th}>{b.group}</th>
-                      <th className={th}>{b.regionsCol}</th>
-                      <th className={th}>{b.eventsCol}</th>
-                      <th className={th}>{b.baselineCsi}</th>
-                      <th className={th}>{b.bestCol}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {report.groups.map((g) => {
-                      const top = g.results
-                        .slice(1)
-                        .reduce<BacktestResult | null>(
-                          (m, r) => ((r.overall.csi ?? -1) > (m?.overall.csi ?? -1) ? r : m),
-                          null,
-                        );
-                      return (
-                        <tr key={g.climate} className="border-b border-slate-800/60">
-                          <td className={`${td} text-slate-100`}>
-                            {b.climates[g.climate] ?? g.climate}
-                          </td>
-                          <td className={td}>{g.regions}</td>
-                          <td className={td}>{g.events}</td>
-                          <td className={td}>{pct(g.results[0]?.overall.csi)}</td>
-                          <td className={td}>
-                            {top ? `${label(top, 1)} · ${pct(top.overall.csi)}` : "–"}
-                          </td>
+                          ))}
                         </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {fss.length > 0 && (
+              <>
+                <h3 className="mt-6 mb-1 text-xs font-semibold text-slate-400">{b.fss}</h3>
+                <p className="mb-2 text-xs text-slate-500">{b.fssNote}</p>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-270 text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800">
+                        <th className={th} rowSpan={2}>
+                          {b.config}
+                        </th>
+                        {fssThresholds.map((thr) => (
+                          <th
+                            key={thr}
+                            className={th}
+                            colSpan={fss.filter((f) => f.threshold === thr).length}
+                          >
+                            {b.fssThreshold(thr)}
+                          </th>
+                        ))}
+                      </tr>
+                      <tr className="border-b border-slate-800">
+                        {fss.map((f) => (
+                          <th key={`${f.threshold}-${f.window}`} className={`${th} font-normal`}>
+                            {b.fssWindow(f.window_km)}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results.map((r, i) => (
+                        <tr key={r.name} className="border-b border-slate-800/60">
+                          <td className={`${td} text-slate-100`}>{label(r, i)}</td>
+                          {fss.map((f) => {
+                            const s = r.fss?.find(
+                              (x) => x.threshold === f.threshold && x.window === f.window,
+                            );
+                            return (
+                              <td key={`${f.threshold}-${f.window}`} className={`${td} whitespace-nowrap`}>
+                                {num(s?.overall)}
+                                {s?.delta_fss != null && (
+                                  <span className="ml-1 text-xs text-slate-500">{signed(s.delta_fss)}</span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+            {report.groups && report.groups.length > 1 && (
+              <>
+                <h3 className="mt-6 mb-2 text-xs font-semibold text-slate-400">{b.groups}</h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full min-w-140 text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-800">
+                        <th className={th}>{b.group}</th>
+                        <th className={th}>{b.regionsCol}</th>
+                        <th className={th}>{b.eventsCol}</th>
+                        <th className={th}>{b.baselineCsi}</th>
+                        <th className={th}>{b.bestCol}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {report.groups.map((g) => {
+                        const top = g.results
+                          .slice(1)
+                          .reduce<BacktestResult | null>(
+                            (m, r) => ((r.overall.csi ?? -1) > (m?.overall.csi ?? -1) ? r : m),
+                            null,
+                          );
+                        return (
+                          <tr key={g.climate} className="border-b border-slate-800/60">
+                            <td className={`${td} text-slate-100`}>
+                              {b.climates[g.climate] ?? g.climate}
+                            </td>
+                            <td className={td}>{g.regions}</td>
+                            <td className={td}>{g.events}</td>
+                            <td className={td}>{pct(g.results[0]?.overall.csi)}</td>
+                            <td className={td}>
+                              {top ? `${label(top, 1)} · ${pct(top.overall.csi)}` : "–"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )}
+          </details>
           <p className="mt-3 text-xs leading-relaxed text-slate-500">
             {report.blocks != null && <>{b.intervals(report.blocks)} </>}
             {b.note}

@@ -3,7 +3,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -15,9 +14,14 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/gin-gonic/gin"
+	swaggerFiles "github.com/swaggo/files"
+	ginSwagger "github.com/swaggo/gin-swagger"
+
 	"raincast/internal/backtest"
 	"raincast/internal/geocode"
 	"raincast/internal/pipeline"
+	_ "raincast/internal/server/docs" // registers the Swagger spec
 	"raincast/internal/store"
 )
 
@@ -91,31 +95,60 @@ type Server struct {
 	clientTiles bool
 }
 
-// New returns the HTTP handler.
+//go:generate go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g server.go -o docs --parseInternal --parseDependency --outputTypes go,json,yaml
+
+// New returns the HTTP handler. The API is documented at /api/docs/index.html.
+//
+//	@title			RainCast API
+//	@version		1.0
+//	@description	Minute-by-minute rain nowcasts from radar, place search and map tiles.
+//	@BasePath		/
 func New(src Source, geo Geocoder, st *store.Store, log *slog.Logger, cfg Config) http.Handler {
 	s := &Server{
 		src: src, geo: geo, store: st, log: log,
 		corsOrigin: cfg.CORSOrigin, backtest: cfg.Backtest, countryOf: cfg.CountryOf,
 		countryHdr: cfg.CountryHeader, realIPHdr: cfg.RealIPHeader, clientTiles: cfg.ClientTiles,
 	}
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", s.health)
-	mux.HandleFunc("GET /api/forecast", s.forecast)
-	mux.HandleFunc("POST /api/forecast", s.forecast)
-	mux.HandleFunc("GET /api/geocode", s.geocode)
-	mux.HandleFunc("GET /api/suggest", s.suggest)
-	mux.HandleFunc("GET /api/reverse", s.reverse)
-	mux.HandleFunc("GET /api/tiles/{z}/{x}/{y}", s.tile)
-	mux.HandleFunc("GET /api/radar", s.radar)
+	gin.SetMode(gin.ReleaseMode)
+	r := gin.New()
+	r.Use(s.logging, s.cors)
+	r.NoRoute(func(c *gin.Context) { writeError(c, http.StatusNotFound, "not found") })
+	r.GET("/healthz", s.health)
+	r.GET("/api/forecast", s.forecast)
+	r.POST("/api/forecast", s.forecast)
+	r.GET("/api/geocode", s.geocode)
+	r.GET("/api/suggest", s.suggest)
+	r.GET("/api/reverse", s.reverse)
+	r.GET("/api/tiles/:z/:x/:y", s.tile)
+	r.GET("/api/radar", s.radar)
+	r.GET("/api/docs/*any", ginSwagger.WrapHandler(swaggerFiles.Handler))
 	if cfg.Admin {
-		s.routeAdmin(mux)
+		s.routeAdmin(r)
 	}
-	return s.logging(s.cors(mux))
+	return r
 }
 
-func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	s.src.EnsureFresh(r.Context())
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "ready": s.src.Ready()})
+// healthResponse is the body of GET /healthz.
+type healthResponse struct {
+	OK    bool `json:"ok"`
+	Ready bool `json:"ready"` // the radar frame index has loaded
+}
+
+// errorResponse is the body of every failed request.
+type errorResponse struct {
+	Error string `json:"error"`
+}
+
+// health reports whether the server is up and ready to forecast.
+//
+//	@Summary	Health check
+//	@Tags		health
+//	@Produce	json
+//	@Success	200	{object}	healthResponse
+//	@Router		/healthz [get]
+func (s *Server) health(c *gin.Context) {
+	s.src.EnsureFresh(c.Request.Context())
+	writeJSON(c, http.StatusOK, healthResponse{OK: true, Ready: s.src.Ready()})
 }
 
 // parseLatLon validates coordinates and rounds them to ~10 m, which is
@@ -132,48 +165,70 @@ func parseLatLon(latS, lonS string) (lat, lon float64, err error) {
 
 const maxQueryLen = 500
 
-func (s *Server) geocode(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query().Get("q")
+// geocode resolves an address, coordinates or a map link into places.
+//
+//	@Summary	Search places
+//	@Tags		geocode
+//	@Produce	json
+//	@Param		q	query		string	true	"Address, coordinates or a map link (max 500 characters)"
+//	@Success	200	{array}		geocode.Place
+//	@Failure	400	{object}	errorResponse
+//	@Failure	422	{object}	errorResponse	"The link has no location"
+//	@Failure	502	{object}	errorResponse
+//	@Router		/api/geocode [get]
+func (s *Server) geocode(c *gin.Context) {
+	q := c.Query("q")
 	if q == "" || utf8.RuneCountInString(q) > maxQueryLen {
-		writeError(w, http.StatusBadRequest, "q is required (max 500 characters)")
+		writeError(c, http.StatusBadRequest, "q is required (max 500 characters)")
 		return
 	}
-	places, err := s.geo.Resolve(r.Context(), q, s.country(r))
+	places, err := s.geo.Resolve(c.Request.Context(), q, s.country(c.Request))
 	switch {
 	case errors.Is(err, geocode.ErrUnresolvedLink):
-		writeError(w, http.StatusUnprocessableEntity, "link has no location")
+		writeError(c, http.StatusUnprocessableEntity, "link has no location")
 	case err != nil:
 		s.log.Error("geocode", "err", err)
-		writeError(w, http.StatusBadGateway, "address lookup failed")
+		writeError(c, http.StatusBadGateway, "address lookup failed")
 	default:
-		writeJSON(w, http.StatusOK, places)
+		writeJSON(c, http.StatusOK, places)
 	}
 }
 
 // suggest returns places for a partial query; optional lat/lon rank nearby
 // results first.
-func (s *Server) suggest(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	text := q.Get("q")
+//
+//	@Summary		Suggest places while typing
+//	@Description	Best-effort: a failed lookup answers with an empty list.
+//	@Tags			geocode
+//	@Produce		json
+//	@Param			q	query		string	false	"Partial query (max 500 characters)"
+//	@Param			lat	query		number	false	"Latitude to rank nearby places first"
+//	@Param			lon	query		number	false	"Longitude to rank nearby places first"
+//	@Success		200	{array}		geocode.Place
+//	@Failure		400	{object}	errorResponse
+//	@Router			/api/suggest [get]
+func (s *Server) suggest(c *gin.Context) {
+	text := c.Query("q")
 	if utf8.RuneCountInString(text) > maxQueryLen {
-		writeError(w, http.StatusBadRequest, "q is too long (max 500 characters)")
+		writeError(c, http.StatusBadRequest, "q is too long (max 500 characters)")
 		return
 	}
 	var bias *geocode.LatLon
-	lat, err1 := strconv.ParseFloat(q.Get("lat"), 64)
-	lon, err2 := strconv.ParseFloat(q.Get("lon"), 64)
+	lat, err1 := strconv.ParseFloat(c.Query("lat"), 64)
+	lon, err2 := strconv.ParseFloat(c.Query("lon"), 64)
 	if err1 == nil && err2 == nil && math.Abs(lat) <= 90 && math.Abs(lon) <= 180 {
 		bias = &geocode.LatLon{Lat: lat, Lon: lon}
 	}
-	places, err := s.geo.Suggest(r.Context(), text, bias, s.country(r))
+	ctx := c.Request.Context()
+	places, err := s.geo.Suggest(ctx, text, bias, s.country(c.Request))
 	if err != nil {
-		if r.Context().Err() == nil {
+		if ctx.Err() == nil {
 			s.log.Warn("suggest", "err", err)
 		}
 		// Suggestions are best-effort; the client keeps typing.
 		places = []geocode.Place{}
 	}
-	writeJSON(w, http.StatusOK, places)
+	writeJSON(c, http.StatusOK, places)
 }
 
 // country is the requesting user's country, "" when unknown.
@@ -225,64 +280,93 @@ func clientIP(r *http.Request) netip.Addr {
 
 // reverse names a point picked on the map. A failed lookup still answers
 // with the point, named by its coordinates.
-func (s *Server) reverse(w http.ResponseWriter, r *http.Request) {
-	lat, lon, err := parseLatLon(r.URL.Query().Get("lat"), r.URL.Query().Get("lon"))
+//
+//	@Summary	Name a point on the map
+//	@Tags		geocode
+//	@Produce	json
+//	@Param		lat	query		number	true	"Latitude (±85)"
+//	@Param		lon	query		number	true	"Longitude (±180)"
+//	@Success	200	{object}	geocode.Place
+//	@Failure	400	{object}	errorResponse
+//	@Router		/api/reverse [get]
+func (s *Server) reverse(c *gin.Context) {
+	lat, lon, err := parseLatLon(c.Query("lat"), c.Query("lon"))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(c, http.StatusBadRequest, err.Error())
 		return
 	}
-	p, err := s.geo.Reverse(r.Context(), lat, lon)
-	if err != nil && r.Context().Err() == nil && !errors.Is(err, geocode.ErrNoKey) {
+	ctx := c.Request.Context()
+	p, err := s.geo.Reverse(ctx, lat, lon)
+	if err != nil && ctx.Err() == nil && !errors.Is(err, geocode.ErrNoKey) {
 		s.log.Warn("reverse", "err", err)
 	}
 	if err == nil {
 		// The name depends only on the point, so a CDN may keep it.
-		w.Header().Set("Cache-Control", "public, max-age=86400, s-maxage=86400")
+		c.Header("Cache-Control", "public, max-age=86400, s-maxage=86400")
 	}
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(c, http.StatusOK, p)
 }
 
 // tile proxies a map tile so the Geoapify key stays on the server.
-func (s *Server) tile(w http.ResponseWriter, r *http.Request) {
-	z, err1 := strconv.Atoi(r.PathValue("z"))
-	x, err2 := strconv.Atoi(r.PathValue("x"))
-	y, err3 := strconv.Atoi(strings.TrimSuffix(r.PathValue("y"), ".png"))
+//
+//	@Summary	Base map tile
+//	@Tags		map
+//	@Produce	png
+//	@Param		z	path		int		true	"Zoom"
+//	@Param		x	path		int		true	"Tile column"
+//	@Param		y	path		string	true	"Tile row, optionally with .png"
+//	@Success	200	{file}		binary
+//	@Failure	400	{object}	errorResponse
+//	@Failure	502	{object}	errorResponse
+//	@Failure	503	{object}	errorResponse	"Map tiles are not configured"
+//	@Router		/api/tiles/{z}/{x}/{y} [get]
+func (s *Server) tile(c *gin.Context) {
+	z, err1 := strconv.Atoi(c.Param("z"))
+	x, err2 := strconv.Atoi(c.Param("x"))
+	y, err3 := strconv.Atoi(strings.TrimSuffix(c.Param("y"), ".png"))
 	if err1 != nil || err2 != nil || err3 != nil {
-		writeError(w, http.StatusBadRequest, "bad tile")
+		writeError(c, http.StatusBadRequest, "bad tile")
 		return
 	}
-	b, err := s.geo.Tile(r.Context(), z, x, y)
+	ctx := c.Request.Context()
+	b, err := s.geo.Tile(ctx, z, x, y)
 	switch {
 	case errors.Is(err, geocode.ErrBadTile):
-		writeError(w, http.StatusBadRequest, "bad tile")
+		writeError(c, http.StatusBadRequest, "bad tile")
 	case errors.Is(err, geocode.ErrNoKey):
 		// Logged once at startup.
-		writeError(w, http.StatusServiceUnavailable, "map tiles are not configured")
+		writeError(c, http.StatusServiceUnavailable, "map tiles are not configured")
 	case err != nil:
-		if r.Context().Err() == nil {
+		if ctx.Err() == nil {
 			s.log.Warn("tile", "err", err)
 		}
-		writeError(w, http.StatusBadGateway, "map tile unavailable")
+		writeError(c, http.StatusBadGateway, "map tile unavailable")
 	default:
-		w.Header().Set("Content-Type", "image/png")
 		// s-maxage lets a CDN (Vercel's) keep tiles for every visitor.
-		w.Header().Set("Cache-Control", "public, max-age=2592000, s-maxage=2592000")
-		w.Write(b)
+		c.Header("Cache-Control", "public, max-age=2592000, s-maxage=2592000")
+		c.Data(http.StatusOK, "image/png", b)
 	}
 }
 
 // radar names the newest radar frame for the map. Browsers fetch its tiles
 // from RainViewer themselves, so map views don't spend the server's quota.
-func (s *Server) radar(w http.ResponseWriter, r *http.Request) {
-	s.src.EnsureFresh(r.Context())
+//
+//	@Summary	Newest radar frame
+//	@Tags		map
+//	@Produce	json
+//	@Success	200	{object}	pipeline.RadarFrame
+//	@Failure	503	{object}	errorResponse	"Radar data is still loading"
+//	@Router		/api/radar [get]
+func (s *Server) radar(c *gin.Context) {
+	s.src.EnsureFresh(c.Request.Context())
 	f, ok := s.src.Radar()
 	if !ok {
-		writeError(w, http.StatusServiceUnavailable, "radar data is still loading; try again shortly")
+		writeError(c, http.StatusServiceUnavailable, "radar data is still loading; try again shortly")
 		return
 	}
 	age := radarMaxAge(f.NextDue, time.Now())
-	w.Header().Set("Cache-Control", fmt.Sprintf("public, max-age=%d, s-maxage=%d, stale-while-revalidate=%d", age, age, age))
-	writeJSON(w, http.StatusOK, f)
+	c.Header("Cache-Control", fmt.Sprintf("public, max-age=%d, s-maxage=%d, stale-while-revalidate=%d", age, age, age))
+	writeJSON(c, http.StatusOK, f)
 }
 
 // radarMaxAge is how many seconds a radar answer may be cached: up to a
@@ -297,51 +381,36 @@ func radarMaxAge(due, now time.Time) int {
 	return min(until, most)
 }
 
-func (s *Server) fail(w http.ResponseWriter, err error) {
+func (s *Server) fail(c *gin.Context, err error) {
 	s.log.Error("request failed", "err", err)
-	writeError(w, http.StatusInternalServerError, "internal error")
+	writeError(c, http.StatusInternalServerError, "internal error")
 }
 
-func (s *Server) cors(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.corsOrigin != "" {
-			w.Header().Set("Access-Control-Allow-Origin", s.corsOrigin)
-			w.Header().Set("Vary", "Origin")
-			if r.Method == http.MethodOptions {
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-				w.WriteHeader(http.StatusNoContent)
-				return
-			}
+// cors also answers preflights: gin runs global middleware for unmatched
+// routes too, so an OPTIONS request reaches it.
+func (s *Server) cors(c *gin.Context) {
+	if s.corsOrigin != "" {
+		c.Header("Access-Control-Allow-Origin", s.corsOrigin)
+		c.Header("Vary", "Origin")
+		if c.Request.Method == http.MethodOptions {
+			c.Header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			c.AbortWithStatus(http.StatusNoContent)
+			return
 		}
-		next.ServeHTTP(w, r)
-	})
+	}
+	c.Next()
 }
 
-type statusWriter struct {
-	http.ResponseWriter
-	status int
+func (s *Server) logging(c *gin.Context) {
+	start := time.Now()
+	c.Next()
+	s.log.Debug("http", "method", c.Request.Method, "path", c.Request.URL.Path, "status", c.Writer.Status(), "dur", time.Since(start))
 }
 
-func (w *statusWriter) WriteHeader(code int) {
-	w.status = code
-	w.ResponseWriter.WriteHeader(code)
+func writeJSON(c *gin.Context, status int, v any) {
+	c.JSON(status, v)
 }
 
-func (s *Server) logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(sw, r)
-		s.log.Debug("http", "method", r.Method, "path", r.URL.Path, "status", sw.status, "dur", time.Since(start))
-	})
-}
-
-func writeJSON(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
-}
-
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
+func writeError(c *gin.Context, status int, msg string) {
+	writeJSON(c, status, errorResponse{Error: msg})
 }

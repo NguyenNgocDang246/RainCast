@@ -43,9 +43,6 @@ export type Overview = {
 
 export type Station = { id: string; name: string; lat: number; lon: number };
 
-/** A frame cmd/collect recorded; time is unix seconds. */
-export type Frame = { time: number; path: string };
-
 export type BacktestResult = {
   /** Vietnamese label; build one from method/pairs/trend/baseline instead. */
   name: string;

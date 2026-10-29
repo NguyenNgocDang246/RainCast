@@ -1,7 +1,9 @@
 # The collector machine: radar data for backtesting goes to data/tiles and
 # to a local PostgreSQL. The web app and API run on Vercel and need neither.
 #   cp .env.example .env
-#   docker compose up -d
+#   docker compose up -d                        # db and redis only
+#   docker compose --profile collect up -d      # also the collector
+# Or run the collector on the host: go run ./cmd/collect.
 # Score the collected data (writes data/backtest.json for the admin page):
 #   docker compose run --rm --entrypoint backtest collect
 # The admin page runs locally: go run ./cmd/raincast (uses db and redis
@@ -34,8 +36,10 @@ services:
     ports:
       - "127.0.0.1:6379:6379"
 
+  # Off by default: only started on request (see the top of this file).
   collect:
     build: .
+    profiles: [collect]
     restart: unless-stopped
     env_file: .env
     environment:

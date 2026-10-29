@@ -57,6 +57,9 @@ func TestMLAdjustsForecast(t *testing.T) {
 	if got.ArrivalMin < 0 || got.ArrivalMin > 10 {
 		t.Errorf("arrival %d not recomputed from the adjusted series", got.ArrivalMin)
 	}
+	if len(got.MLDelta) != len(ml.Leads) || plain.MLDelta != nil {
+		t.Errorf("ml_delta %v with the model, %v without", got.MLDelta, plain.MLDelta)
+	}
 }
 
 // Without the trend the forecasts are not the ones the model learned from.

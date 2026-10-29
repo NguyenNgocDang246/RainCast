@@ -16,7 +16,8 @@ Python or cgo at run time):
 
 Inside the training regions, a fifth of the regions (by name) is held out to
 stop boosting, calibrate the probabilities (isotonic) and pick, per lead, the
-probability above which the strength is forecast (best CSI, pooled with the
+probability above which the strength is forecast (the best CSI that beats
+the ensemble on both POD and FAR, see pick_pstar; pooled with the
 neighbouring leads so it does not jump from one lead to the next). Early
 stopping looks at leads up to 60 minutes only: they are what the app shows.
 
@@ -111,11 +112,34 @@ def held_out(region_names):
     return np.array([zlib.crc32(n.encode()) % 5 == 0 for n in region_names])
 
 
-def csi(y, pred, w):
-    h = np.sum(w[pred & y])
-    m = np.sum(w[~pred & y])
-    f = np.sum(w[pred & ~y])
-    return h / (h + m + f) if h + m + f > 0 else float("nan")
+def counts(y, pred, w):
+    """Weighted hits, misses and false alarms."""
+    return np.array([np.sum(w[pred & y]), np.sum(w[~pred & y]), np.sum(w[pred & ~y])])
+
+
+def scores(c):
+    """POD, FAR, CSI and frequency bias of counts (..., 3)."""
+    h, m, f = c[..., 0], c[..., 1], c[..., 2]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return h / (h + m), f / (h + f), h / (h + m + f), (h + f) / (h + m)
+
+
+def pick_pstar(ml, ens):
+    """The PStar index for pooled counts ml (grid, 3) against the ensemble's
+    own forecast ens (3,): the best CSI among the thresholds that catch at
+    least as much rain as the ensemble (POD) with no more false alarms (FAR);
+    with none, the one whose frequency bias is nearest the ensemble's. At
+    equal bias POD and FAR move together (bias = POD / (1 - FAR)), so that
+    is where whatever skill the model has shows in both. The best CSI alone
+    (the old rule) over-forecast: bias 1.07 at 20 dBZ, 1.14 at 30."""
+    pod, far, csi, bias = scores(ml)
+    epod, efar, _, ebias = scores(ens)
+    ok = (pod >= epod) & (far <= efar)
+    if ok.any():
+        return int(np.nanargmax(np.where(ok, csi, -np.inf))), True
+    if np.isfinite(ebias) and np.isfinite(bias).any():
+        return int(np.nanargmin(np.abs(bias - ebias))), False
+    return len(PSTAR_GRID) // 2, False
 
 
 def flatten(tree):
@@ -182,6 +206,8 @@ def fit(x, y, w, lead, val, names):
     """Train every class on ~val, calibrate and pick PStar on val."""
     classes = []
     report = {}
+    # The ensemble's own forecast, what the model must beat.
+    mean = x[val][:, names.index("m_mean")]
     for dbz in CLASSES:
         yy = y >= dbz
         booster = train_class(x[~val], yy[~val], w[~val], x[val], yy[val], w[val], lead[val])
@@ -191,30 +217,33 @@ def fit(x, y, w, lead, val, names):
         iso.fit(p, yy[val], sample_weight=w[val])
         pc = iso.predict(p)
         leads = sorted(set(lead[val].tolist()))
-        curves = []
+        cnt, ens = [], []
         for L in leads:
             sel = lead[val] == L
-            curves.append([csi(yy[val][sel], pc[sel] >= ps, w[val][sel]) for ps in PSTAR_GRID])
-        curves = np.array(curves, dtype=np.float64)
+            ys, ws = yy[val][sel], w[val][sel]
+            cnt.append([counts(ys, pc[sel] >= ps, ws) for ps in PSTAR_GRID])
+            ens.append(counts(ys, mean[sel] >= dbz, ws))
+        cnt, ens = np.array(cnt, dtype=np.float64), np.array(ens, dtype=np.float64)
         pstar, best = {}, {}
         for i, L in enumerate(leads):
-            # The CSI curves of this lead and its neighbours, averaged: a
-            # threshold picked on one lead alone jumps with the noise of
-            # the few strong echoes, and the forecast flickers with it.
-            near = curves[max(i - 1, 0):i + 2]
-            valid = ~np.isnan(near)
-            pooled = np.where(valid.any(axis=0), np.nansum(near, axis=0) / np.maximum(valid.sum(axis=0), 1), np.nan)
-            k = int(np.nanargmax(pooled)) if valid.any() else len(PSTAR_GRID) // 2
+            # Counts of this lead and its neighbours, pooled: a threshold
+            # picked on one lead alone jumps with the noise of the few
+            # strong echoes, and the forecast flickers with it.
+            near = slice(max(i - 1, 0), i + 2)
+            k, beats = pick_pstar(cnt[near].sum(axis=0), ens[near].sum(axis=0))
             pstar[str(int(L))] = float(PSTAR_GRID[k])
-            got = curves[i][k]
-            best[str(int(L))] = None if math.isnan(got) else round(float(got), 4)
+            pod, far, c, _ = scores(cnt[i][k])
+            epod, efar, ec, _ = scores(ens[i])
+            r = lambda v: None if math.isnan(v) else round(float(v), 4)
+            best[str(int(L))] = dict(pstar=float(PSTAR_GRID[k]), beats_ensemble=beats,
+                                     pod=r(pod), far=r(far), csi=r(c), ens_pod=r(epod), ens_far=r(efar), ens_csi=r(ec))
         dump = booster.dump_model(num_iteration=booster.best_iteration)
         trees = [flatten(t) for t in dump["tree_info"]]
         check(trees, booster, x[val])
         xs = [float(v) for v in iso.X_thresholds_]
         ys = [float(v) for v in iso.y_thresholds_]
         classes.append(dict(dbz=dbz, trees=trees, calib_x=xs, calib_y=ys, pstar=pstar))
-        report[f">={int(dbz)}dBZ"] = dict(trees=len(trees), val_csi_by_lead=best)
+        report[f">={int(dbz)}dBZ"] = dict(trees=len(trees), val_by_lead=best)
     return classes, report
 
 

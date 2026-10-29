@@ -156,7 +156,6 @@ export const vi = {
     tabs: {
       overview: "Tổng quan",
       backtest: "Backtest",
-      frames: "Khung radar",
       tools: "Công cụ",
     },
 
@@ -186,19 +185,6 @@ export const vi = {
       stations: (n: number, names: string, since: string) =>
         `Vị trí mặc định: ${names.split(", ")[0]} · ${n} vị trí đặt sẵn · chạy từ ${since}`,
       lastError: "Lỗi lần poll gần nhất:",
-
-      stored: "Dữ liệu đã thu (cmd/collect)",
-      frames: "Khung radar",
-      regions: "Vùng theo dõi",
-      noDatabase: "Chưa nối database (DATABASE_URL)",
-
-      geocoding: (on: boolean) => `Geoapify (từ lần khởi động) · ${on ? "đã có key" : "chưa có key"}`,
-      cacheHits: "Trả từ cache",
-      failed: "Lỗi",
-      rateLimited: (n: number) => `${n} lần hết lượt`,
-      tiles: "Ô bản đồ tải về",
-      tilesSub: (cached: number, errors: number) => `${cached} từ cache · ${errors} lỗi`,
-
     },
 
     backtest: {
@@ -254,19 +240,11 @@ export const vi = {
       delta: "Δ so với TREC 4 cặp",
       bss: "BSS",
       auc: "AUC",
-      accum: "mm/giờ ±",
-      ms: "ms/lần",
+      details: "Chi tiết: theo loại mưa, FSS, nhóm khí hậu",
       better: "chắc chắn tốt hơn",
       worse: "chắc chắn kém hơn",
       intervals: (blocks: number) => `Khoảng tin cậy 95% lấy từ ${blocks} khối 6 giờ.`,
-      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). mm/giờ ±: sai số trung bình lượng mưa tích luỹ 1 giờ so với radar (càng thấp càng tốt). ms/lần: thời gian tính ước chừng. “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
-    },
-
-    history: {
-      framesTitle: (n: number) => `Khung radar đã ghi (${n} gần nhất)`,
-      frameTime: "Thời điểm khung",
-      path: "Đường dẫn tile",
-      noFrames: "Chưa có khung nào (hoặc chưa nối database).",
+      note: "Δ: chênh CSI so với TREC 4 cặp (cấu hình app đang dùng); ▲/▼ khi cả khoảng tin cậy nằm trên/dưới 0, tức khác biệt không phải do ngẫu nhiên. BSS: kỹ năng dự báo xác suất so với giữ nguyên (0 = không hơn, càng gần 1 càng tốt). AUC: khả năng phân biệt có mưa/không mưa (0,5 = đoán bừa, 1 = hoàn hảo). “+ xu hướng” thêm mưa mạnh lên/yếu đi. Mọi cấu hình chấm trên cùng thời điểm và điểm (chỉ nơi có radar phủ); điểm được cộng dồn qua các lần chạy.",
     },
 
     tools: {
@@ -288,11 +266,9 @@ export const vi = {
       motion: "Chuyển động",
       motionValue: (kmh: string, dir: string, deg: string) => `${kmh} km/h về ${dir} (${deg}°)`,
       noMotion: "không đủ dữ liệu",
-      coherence: "Độ đồng hướng",
-      gain: "Vector giải thích radar",
-      member: (method: string) => `Chuyển động ${method.toUpperCase()}`,
       threshold: "Ngưỡng",
       thresholdValue: (rain: number, heavy: number) => `mưa ≥ ${rain} dBZ · mưa to ≥ ${heavy} dBZ`,
+      mlDelta: "ML chỉnh (dBZ)",
       minuteFromFrame: "Phút (từ khung)",
       predictedDbz: "dBZ dự báo",
     },

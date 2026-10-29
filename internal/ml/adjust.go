@@ -37,9 +37,9 @@ func (s *Scene) Prime() {
 // the echo moves into the band b's probabilities point to (Apply), and
 // between them the change is interpolated, from none now. members are the
 // members' own trended nowcasts in Members order (a zero Result for a
-// missing one), read with LeadProbRadius. It reports whether it applied,
-// false when no member forecast the point.
-func (b *Bundle) Adjust(s *Scene, x, y float64, members []nowcast.Result, series []nowcast.Point) bool {
+// missing one), read with LeadProbRadius. It returns the change it made at
+// each of Leads (dBZ), nil when no member forecast the point.
+func (b *Bundle) Adjust(s *Scene, x, y float64, members []nowcast.Result, series []nowcast.Point) []float32 {
 	pt := s.Prepare(x, y, Leads)
 	row := make([]float32, len(Names))
 	vals := make([]float32, len(members))
@@ -57,7 +57,7 @@ func (b *Bundle) Adjust(s *Scene, x, y float64, members []nowcast.Result, series
 			}
 		}
 		if n == 0 {
-			return false
+			return nil
 		}
 		s.Row(pt, li, l, vals, prob/float32(n), row)
 		e := row[mean]
@@ -68,7 +68,11 @@ func (b *Bundle) Adjust(s *Scene, x, y float64, members []nowcast.Result, series
 			series[i].DBZ = max(series[i].DBZ+float32(d), radar.MinDBZ)
 		}
 	}
-	return true
+	out := make([]float32, len(delta))
+	for i, d := range delta {
+		out[i] = float32(d)
+	}
+	return out
 }
 
 // leadDelta interpolates the change at Leads (delta) to minute m: none at

@@ -36,6 +36,8 @@ export type Forecast = {
   motion_members?: { method: string; speed_kmh: number; direction_deg: number }[];
   /** Rain expected over the 60 minutes after frame_time, in mm (estimated from radar). */
   accum_mm?: number;
+  /** The ML layer's change to the series (dBZ) at minutes 10, 20, … 60 (ml.Leads); absent when it did not apply. */
+  ml_delta?: number[];
 };
 
 export type Place = { name: string; address: string; lat: number; lon: number };

@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"strings"
 	"testing"
 	"time"
 
@@ -270,6 +271,39 @@ func TestRadarEndpoint(t *testing.T) {
 	var f pipeline.RadarFrame
 	if err := json.NewDecoder(rec.Body).Decode(&f); err != nil || rec.Code != http.StatusOK || f.MaxZoom != 7 || f.TileURL == "" {
 		t.Errorf("%d %+v %v", rec.Code, f, err)
+	}
+}
+
+func TestSwaggerDocs(t *testing.T) {
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
+	rec := do(t, h, "/api/docs/doc.json")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"title": "RainCast API"`) || !strings.Contains(rec.Body.String(), `"/api/forecast"`) {
+		t.Fatalf("spec: %d %.200s", rec.Code, rec.Body)
+	}
+	if rec := do(t, h, "/api/docs/index.html"); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "swagger-ui") {
+		t.Errorf("UI: %d", rec.Code)
+	}
+}
+
+func TestCORSPreflight(t *testing.T) {
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{CORSOrigin: "https://example.com"})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodOptions, "/api/forecast?lat=1&lon=2", nil))
+	if rec.Code != http.StatusNoContent || rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" || rec.Header().Get("Access-Control-Allow-Methods") == "" {
+		t.Fatalf("preflight: %d %v", rec.Code, rec.Header())
+	}
+	if rec := do(t, h, "/api/radar"); rec.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
+		t.Errorf("GET has no CORS header: %v", rec.Header())
+	}
+}
+
+// Unknown paths answer JSON errors like every other failure.
+func TestNotFoundIsJSON(t *testing.T) {
+	h := New(&fakeSource{}, fakeGeo{}, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), Config{})
+	rec := do(t, h, "/api/nope")
+	var e errorResponse
+	if rec.Code != http.StatusNotFound || json.Unmarshal(rec.Body.Bytes(), &e) != nil || e.Error == "" {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
 

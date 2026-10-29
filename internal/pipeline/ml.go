@@ -102,12 +102,14 @@ func (p *Pipeline) applyML(r *region, lat, lon, x, y float64, opt nowcast.Option
 		o.Trend = tr
 		members[k] = nowcast.Forecast(r.cur.Grid, f, x, y, o)
 	}
-	if !b.Adjust(&s, x, y, members, res.Series) {
+	delta := b.Adjust(&s, x, y, members, res.Series)
+	if delta == nil {
 		return false
 	}
 	sum := nowcast.Summarize(res.Series, opt)
 	res.RainingNow, res.ArrivalMin = sum.RainingNow, sum.ArrivalMin
 	res.HeavyNow, res.HeavyArrivalMin = sum.HeavyNow, sum.HeavyArrivalMin
 	res.AccumMM = sum.AccumMM
+	res.MLDelta = delta
 	return true
 }

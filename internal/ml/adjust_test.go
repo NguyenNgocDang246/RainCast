@@ -54,23 +54,27 @@ func TestAdjust(t *testing.T) {
 	members := []nowcast.Result{constant(25), constant(25), constant(25)}
 	series := constant(25).Series
 
-	if !b.Adjust(s, 128, 128, members, series) {
-		t.Fatal("not applied")
+	delta := b.Adjust(s, 128, 128, members, series)
+	if len(delta) != len(Leads) {
+		t.Fatalf("delta %v, want one per lead", delta)
 	}
 	if series[0].DBZ != 25 {
 		t.Errorf("minute 0 changed to %v", series[0].DBZ)
 	}
-	for _, l := range Leads {
+	for li, l := range Leads {
 		want := b.Apply(25, l, b.Predict(row(25)))
 		if math.Abs(float64(series[l].DBZ-want)) > 1e-4 {
 			t.Errorf("minute %d = %v, want Apply's %v", l, series[l].DBZ, want)
+		}
+		if math.Abs(float64(delta[li]-(want-25))) > 1e-4 {
+			t.Errorf("delta at %d = %v, want %v", l, delta[li], want-25)
 		}
 	}
 	if want := 25 + (series[10].DBZ-25)/2; math.Abs(float64(series[5].DBZ-want)) > 1e-4 {
 		t.Errorf("minute 5 = %v, want halfway %v", series[5].DBZ, want)
 	}
 
-	if b.Adjust(s, 128, 128, make([]nowcast.Result, 3), constant(25).Series) {
+	if b.Adjust(s, 128, 128, make([]nowcast.Result, 3), constant(25).Series) != nil {
 		t.Error("applied without members")
 	}
 }

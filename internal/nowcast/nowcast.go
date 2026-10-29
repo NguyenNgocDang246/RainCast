@@ -74,6 +74,9 @@ type Result struct {
 	// AccumMM is the rain expected over the horizon, in mm, from the
 	// series through radar.RainRate.
 	AccumMM float64 `json:"accum_mm"`
+	// MLDelta is the change learned post-processing made to the series at
+	// each of its leads (dBZ; package ml), when it applied.
+	MLDelta []float32 `json:"ml_delta,omitempty"`
 }
 
 // MemberMotion is one motion method's motion at the target.
