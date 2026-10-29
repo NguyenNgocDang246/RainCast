@@ -44,6 +44,14 @@ Server dự báo. Mặc định nghe ở `:8080`.
 go run ./cmd/raincast
 ```
 
+Tài liệu API (Swagger UI): `http://localhost:8080/api/docs/index.html` (trên Vercel: `/api/docs/index.html`). Nhóm `admin` chỉ chạy được khi không ở production.
+
+Sau khi đổi handler hoặc annotation `@...` trong `internal/server`, sinh lại spec (`internal/server/docs`) rồi commit:
+
+```powershell
+go generate ./internal/server
+```
+
 **Server**
 
 | Tham số | Mặc định | Ý nghĩa |

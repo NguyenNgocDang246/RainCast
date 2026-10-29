@@ -6,6 +6,8 @@ import type { NextConfig } from "next";
 const apiUrl = process.env.API_URL ?? "http://localhost:8080";
 
 const nextConfig: NextConfig = {
+  // Don't advertise the framework (X-Powered-By: Next.js).
+  poweredByHeader: false,
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl}/api/:path*` }];
   },

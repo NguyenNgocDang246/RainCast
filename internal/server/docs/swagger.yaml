@@ -1,0 +1,990 @@
+basePath: /
+definitions:
+  backtest.ClassLead:
+    properties:
+      lead_min:
+        type: integer
+      scores:
+        $ref: '#/definitions/verify.Scores'
+    type: object
+  backtest.ClassScore:
+    properties:
+      class:
+        type: string
+      csi_ci:
+        items:
+          type: number
+        type: array
+      csi_mean_60:
+        description: CSIMean60 and CSIMean90 are meanCSI up to 60 and 90 minutes.
+        type: number
+      csi_mean_90:
+        type: number
+      delta_csi:
+        type: number
+      delta_csi_ci:
+        items:
+          type: number
+        type: array
+      hi:
+        type: number
+      leads:
+        items:
+          $ref: '#/definitions/backtest.ClassLead'
+        type: array
+      lo:
+        type: number
+      observed:
+        description: |-
+          Observed is how many samples the class was observed in: few means
+          the scores are noisy.
+        type: integer
+      overall:
+        $ref: '#/definitions/verify.Scores'
+    type: object
+  backtest.Comparison:
+    properties:
+      base:
+        type: string
+      ci:
+        items:
+          type: number
+        type: array
+      delta:
+        type: number
+      max_lead:
+        type: integer
+      other:
+        type: string
+    type: object
+  backtest.ErrCorr:
+    properties:
+      names:
+        items:
+          type: string
+        type: array
+      r:
+        items:
+          items:
+            format: float64
+            type: number
+          type: array
+        type: array
+    type: object
+  backtest.FSSScore:
+    properties:
+      delta_fss:
+        description: DeltaFSS is Overall minus the reference's.
+        type: number
+      leads:
+        description: Leads follow Config.Leads; Overall pools them.
+        items:
+          type: number
+        type: array
+      overall:
+        type: number
+      threshold:
+        description: dBZ
+        type: number
+      window:
+        description: sample points across
+        type: integer
+      window_km:
+        description: about
+        type: number
+    type: object
+  backtest.Group:
+    properties:
+      climate:
+        type: string
+      comparisons:
+        items:
+          $ref: '#/definitions/backtest.Comparison'
+        type: array
+      events:
+        type: integer
+      issues:
+        type: integer
+      regions:
+        type: integer
+      results:
+        items:
+          $ref: '#/definitions/backtest.Result'
+        type: array
+    type: object
+  backtest.LeadScore:
+    properties:
+      accum_mae_mm:
+        description: |-
+          AccumMAE is the mean |pred − obs| rain accumulated up to this lead,
+          in mm, both sides from radar through radar.RainRate.
+        type: number
+      brier:
+        type: number
+      lead_min:
+        type: integer
+      mae_dbz:
+        description: over samples where either side had rain
+        type: number
+      scores:
+        $ref: '#/definitions/verify.Scores'
+    type: object
+  backtest.RegionSummary:
+    properties:
+      climate:
+        type: string
+      csi:
+        items:
+          type: number
+        type: array
+      events:
+        type: integer
+      frames:
+        type: integer
+      issues:
+        type: integer
+      name:
+        type: string
+      skipped:
+        type: integer
+    type: object
+  backtest.RelBin:
+    properties:
+      freq:
+        type: number
+      "n":
+        type: integer
+      p:
+        type: number
+    type: object
+  backtest.Report:
+    properties:
+      blocks:
+        description: six-hour blocks resampled for the intervals
+        type: integer
+      comparisons:
+        description: Comparisons are Config.Compare over every region.
+        items:
+          $ref: '#/definitions/backtest.Comparison'
+        type: array
+      duration:
+        type: string
+      err_corr:
+        $ref: '#/definitions/backtest.ErrCorr'
+      events:
+        description: |-
+          Events counts rain events (an hour or more of rain over the central
+          tile) across regions: the independent cases the scores rest on.
+        type: integer
+      frames:
+        description: frames loaded, all regions
+        type: integer
+      from:
+        type: integer
+      generated_at:
+        type: string
+      groups:
+        items:
+          $ref: '#/definitions/backtest.Group'
+        type: array
+      issues:
+        description: forecast times scored, all regions
+        type: integer
+      new_issues:
+        type: integer
+      points:
+        description: sample points per issue
+        type: integer
+      reference:
+        type: string
+      regions:
+        items:
+          $ref: '#/definitions/backtest.RegionSummary'
+        type: array
+      results:
+        description: persistence first, then variants
+        items:
+          $ref: '#/definitions/backtest.Result'
+        type: array
+      skipped:
+        description: frames whose tiles were missing
+        type: integer
+      to:
+        type: integer
+    type: object
+  backtest.Result:
+    properties:
+      accum_mae_mm:
+        description: |-
+          AccumMAE is LeadScore.AccumMAE at the last lead: the error in the
+          hour's rain total.
+        type: number
+      auc:
+        type: number
+      baseline:
+        type: boolean
+      brier:
+        description: |-
+          Probability scores: Brier (lower is better), its skill against
+          persistence, the Brier after calibration learned on the other half
+          of the data, and the area under the ROC curve.
+        type: number
+      brier_cal:
+        type: number
+      bss:
+        type: number
+      classes:
+        description: Classes are the scores on each kind of rain (Config.Classes).
+        items:
+          $ref: '#/definitions/backtest.ClassScore'
+        type: array
+      csi_ci:
+        items:
+          type: number
+        type: array
+      csi_mean_60:
+        description: CSIMean60 and CSIMean90 are meanCSI up to 60 and 90 minutes.
+        type: number
+      csi_mean_90:
+        type: number
+      delta_csi:
+        description: |-
+          DeltaCSI is the overall CSI minus the reference's, with its interval
+          from the same resamples: an interval entirely above 0 means better.
+        type: number
+      delta_csi_ci:
+        items:
+          type: number
+        type: array
+      fss:
+        description: |-
+          FSS are the fractions skill scores, threshold by threshold and window
+          by window (Config.FSSThresholds × Config.FSSWindows).
+        items:
+          $ref: '#/definitions/backtest.FSSScore'
+        type: array
+      leads:
+        items:
+          $ref: '#/definitions/backtest.LeadScore'
+        type: array
+      method:
+        type: string
+      ms_per_issue:
+        type: number
+      name:
+        type: string
+      overall:
+        $ref: '#/definitions/verify.Scores'
+      pairs:
+        type: integer
+      reliability:
+        items:
+          $ref: '#/definitions/backtest.RelBin'
+        type: array
+      trend:
+        type: boolean
+    type: object
+  geocode.Place:
+    properties:
+      address:
+        type: string
+      lat:
+        type: number
+      lon:
+        type: number
+      name:
+        type: string
+    type: object
+  geocode.Stats:
+    properties:
+      autocomplete_ok:
+        type: integer
+      cache_hits:
+        type: integer
+      errors:
+        type: integer
+      geoapify_enabled:
+        type: boolean
+      rate_limited:
+        description: |-
+          RateLimited counts lookups refused by Geoapify (429) or skipped
+          during the cool-down after one.
+        type: integer
+      reverse_ok:
+        type: integer
+      search_ok:
+        type: integer
+      tile_cache_hits:
+        type: integer
+      tile_errors:
+        type: integer
+      tile_fetched:
+        type: integer
+    type: object
+  nowcast.MemberMotion:
+    properties:
+      direction_deg:
+        type: number
+      method:
+        type: string
+      speed_kmh:
+        type: number
+    type: object
+  nowcast.Point:
+    properties:
+      dbz:
+        type: number
+      minute:
+        type: integer
+      mm:
+        description: |-
+          MM is the rain falling during this minute, from radar.RainRate (set by
+          Summarize), so a client can total the rain from any minute on.
+        type: number
+      prob:
+        description: Prob is the chance of rain, when Options.ProbRadius is set.
+        type: number
+    type: object
+  pipeline.Location:
+    properties:
+      lat:
+        type: number
+      lon:
+        type: number
+    type: object
+  pipeline.RadarFrame:
+    properties:
+      max_zoom:
+        type: integer
+      next_due:
+        description: NextDue is when the next frame is expected (Pipeline.NextDue).
+        type: string
+      tile_url:
+        description: Leaflet {z}/{x}/{y} template
+        type: string
+      time:
+        type: string
+    type: object
+  pipeline.Snapshot:
+    properties:
+      accum_mm:
+        description: |-
+          AccumMM is the rain expected over the horizon, in mm, from the
+          series through radar.RainRate.
+        type: number
+      arrival_min:
+        description: ArrivalMin is the first minute with rain, or -1 if none within
+          Horizon.
+        type: integer
+      direction_deg:
+        type: number
+      frame_time:
+        type: string
+      frames_used:
+        type: integer
+      generated_at:
+        type: string
+      heavy_arrival_min:
+        type: integer
+      heavy_dbz:
+        type: number
+      heavy_now:
+        description: HeavyNow and HeavyArrivalMin are the same for heavy rain.
+        type: boolean
+      km_per_px:
+        type: number
+      likely_dbz:
+        type: number
+      location:
+        $ref: '#/definitions/pipeline.Location'
+      ml_delta:
+        description: |-
+          MLDelta is the change learned post-processing made to the series at
+          each of its leads (dBZ; package ml), when it applied.
+        items:
+          type: number
+        type: array
+      model:
+        description: forecast model name
+        type: string
+      motion_coherence:
+        description: |-
+          MotionCoherence, MotionGain and MotionMembers diagnose the motion
+          (set by an ensemble): how much the members agree (|mean| / mean
+          speed, 0–1), how well the motion explains the last radar change
+          (motion.TranslationGain; nil when it cannot tell), and each member's
+          own motion.
+        type: number
+      motion_gain:
+        type: number
+      motion_members:
+        items:
+          $ref: '#/definitions/nowcast.MemberMotion'
+        type: array
+      motion_reliable:
+        type: boolean
+      next_due:
+        description: |-
+          NextDue is when the next radar frame is expected (Pipeline.NextDue),
+          set as the snapshot is served: a newer forecast is not worth asking
+          for before then.
+        type: string
+      outdated:
+        description: |-
+          Outdated, set as the snapshot is served, means a newer radar frame
+          has arrived than the one it starts from (the client's tiles were a
+          frame behind): show it, and ask again for the newer one.
+        type: boolean
+      raining_now:
+        type: boolean
+      series:
+        items:
+          $ref: '#/definitions/nowcast.Point'
+        type: array
+      speed_kmh:
+        description: |-
+          SpeedKmh and DirectionDeg describe echo motion at the target; the
+          direction is where rain is heading, clockwise from north.
+        type: number
+      station:
+        description: set for forecasts stored for a station
+        type: string
+      threshold_dbz:
+        type: number
+      trend:
+        description: intensity growth/decay applied
+        type: boolean
+    type: object
+  pipeline.Station:
+    properties:
+      id:
+        type: string
+      lat:
+        type: number
+      lon:
+        type: number
+      name:
+        type: string
+    type: object
+  pipeline.Status:
+    properties:
+      cached_regions:
+        type: integer
+      frames_in_feed:
+        type: integer
+      last_error:
+        type: string
+      last_tick:
+        type: string
+      latest_frame:
+        type: string
+      location:
+        allOf:
+        - $ref: '#/definitions/pipeline.Location'
+        description: default location
+      model:
+        type: string
+      started:
+        type: string
+      stations:
+        items:
+          $ref: '#/definitions/pipeline.Station'
+        type: array
+      ticks:
+        type: integer
+      trend:
+        type: boolean
+    type: object
+  pipeline.TilePlan:
+    properties:
+      frame:
+        description: the newest frame, forecasts start from it
+        type: integer
+      tiles:
+        items:
+          $ref: '#/definitions/pipeline.TileRef'
+        type: array
+    type: object
+  pipeline.TileRef:
+    properties:
+      sum:
+        description: |-
+          Sum is the hash of the tile the server has (ClientPlan): a client
+          whose tile hashes the same sends the hash instead of the tile.
+        type: string
+      time:
+        type: integer
+      url:
+        type: string
+      x:
+        type: integer
+      "y":
+        type: integer
+    type: object
+  server.BacktestResponse:
+    properties:
+      report:
+        allOf:
+        - $ref: '#/definitions/backtest.Report'
+        description: null before cmd/backtest has run
+    type: object
+  server.Overview:
+    properties:
+      counts:
+        allOf:
+        - $ref: '#/definitions/store.Counts'
+        description: null without a database
+      geocoding:
+        $ref: '#/definitions/geocode.Stats'
+      pipeline:
+        $ref: '#/definitions/pipeline.Status'
+      server_time:
+        type: string
+    type: object
+  server.TilesNeeded:
+    properties:
+      error:
+        type: string
+      tiles_needed:
+        $ref: '#/definitions/pipeline.TilePlan'
+    type: object
+  server.errorResponse:
+    properties:
+      error:
+        type: string
+    type: object
+  server.healthResponse:
+    properties:
+      ok:
+        type: boolean
+      ready:
+        description: the radar frame index has loaded
+        type: boolean
+    type: object
+  store.Counts:
+    properties:
+      frames:
+        type: integer
+      regions:
+        type: integer
+    type: object
+  store.FrameRef:
+    properties:
+      path:
+        type: string
+      time:
+        type: integer
+    type: object
+  verify.Scores:
+    properties:
+      accuracy:
+        type: number
+      correct_negatives:
+        type: integer
+      csi:
+        description: critical success index
+        type: number
+      false_alarms:
+        type: integer
+      far:
+        description: false alarm ratio
+        type: number
+      hits:
+        type: integer
+      misses:
+        type: integer
+      "n":
+        type: integer
+      pod:
+        description: probability of detection
+        type: number
+    type: object
+info:
+  contact: {}
+  description: Minute-by-minute rain nowcasts from radar, place search and map tiles.
+  title: RainCast API
+  version: "1.0"
+paths:
+  /api/admin/backtest:
+    get:
+      description: Development only (served when the server runs with Config.Admin).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.BacktestResponse'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Backtest report
+      tags:
+      - admin
+  /api/admin/forecast:
+    get:
+      description: Development only (served when the server runs with Config.Admin).
+      parameters:
+      - description: Latitude (±85)
+        in: query
+        name: lat
+        required: true
+        type: number
+      - description: Longitude (±180)
+        in: query
+        name: lon
+        required: true
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pipeline.Snapshot'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "503":
+          description: Service Unavailable
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Forecast with server-side tiles
+      tags:
+      - admin
+  /api/admin/frames:
+    get:
+      description: Development only (served when the server runs with Config.Admin).
+      parameters:
+      - description: Frames to list (default 50, max 500)
+        in: query
+        name: limit
+        type: integer
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/store.FrameRef'
+            type: array
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Recorded radar frames
+      tags:
+      - admin
+  /api/admin/overview:
+    get:
+      description: Development only (served when the server runs with Config.Admin).
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.Overview'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Server overview
+      tags:
+      - admin
+  /api/admin/radar.png:
+    get:
+      description: Development only (served when the server runs with Config.Admin).
+      parameters:
+      - description: Latitude (±85)
+        in: query
+        name: lat
+        required: true
+        type: number
+      - description: Longitude (±180)
+        in: query
+        name: lon
+        required: true
+        type: number
+      produces:
+      - image/png
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Radar mosaic image for a point
+      tags:
+      - admin
+  /api/forecast:
+    get:
+      consumes:
+      - multipart/form-data
+      description: |-
+        Answers with a Snapshot. When the server runs with client tiles, a GET may instead answer
+        {"tiles_needed": TilePlan}: download every tile URL, then POST the same query as multipart,
+        one part per tile named <time>_<x>_<y> (PNG bytes) or sum_<time>_<x>_<y> (hex SHA-256 when it
+        matches the plan's sum). A POST answers the Snapshot, {"tiles_missing": [...]} (POST those
+        tiles' bytes), or 409 with a new plan when a newer radar frame arrived.
+      parameters:
+      - description: Latitude (±85)
+        in: query
+        name: lat
+        required: true
+        type: number
+      - description: Longitude (±180)
+        in: query
+        name: lon
+        required: true
+        type: number
+      - description: Content hash of tiles the client has (GET, cached forecast)
+        in: query
+        name: h
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pipeline.Snapshot'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "409":
+          description: Radar frames changed; download the new tiles
+          schema:
+            $ref: '#/definitions/server.TilesNeeded'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "503":
+          description: Radar data is still loading
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Rain forecast for a point
+      tags:
+      - forecast
+    post:
+      consumes:
+      - multipart/form-data
+      description: |-
+        Answers with a Snapshot. When the server runs with client tiles, a GET may instead answer
+        {"tiles_needed": TilePlan}: download every tile URL, then POST the same query as multipart,
+        one part per tile named <time>_<x>_<y> (PNG bytes) or sum_<time>_<x>_<y> (hex SHA-256 when it
+        matches the plan's sum). A POST answers the Snapshot, {"tiles_missing": [...]} (POST those
+        tiles' bytes), or 409 with a new plan when a newer radar frame arrived.
+      parameters:
+      - description: Latitude (±85)
+        in: query
+        name: lat
+        required: true
+        type: number
+      - description: Longitude (±180)
+        in: query
+        name: lon
+        required: true
+        type: number
+      - description: Content hash of tiles the client has (GET, cached forecast)
+        in: query
+        name: h
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pipeline.Snapshot'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "409":
+          description: Radar frames changed; download the new tiles
+          schema:
+            $ref: '#/definitions/server.TilesNeeded'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "503":
+          description: Radar data is still loading
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Rain forecast for a point
+      tags:
+      - forecast
+  /api/geocode:
+    get:
+      parameters:
+      - description: Address, coordinates or a map link (max 500 characters)
+        in: query
+        name: q
+        required: true
+        type: string
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/geocode.Place'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "422":
+          description: The link has no location
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Search places
+      tags:
+      - geocode
+  /api/radar:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/pipeline.RadarFrame'
+        "503":
+          description: Radar data is still loading
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Newest radar frame
+      tags:
+      - map
+  /api/reverse:
+    get:
+      parameters:
+      - description: Latitude (±85)
+        in: query
+        name: lat
+        required: true
+        type: number
+      - description: Longitude (±180)
+        in: query
+        name: lon
+        required: true
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/geocode.Place'
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Name a point on the map
+      tags:
+      - geocode
+  /api/suggest:
+    get:
+      description: 'Best-effort: a failed lookup answers with an empty list.'
+      parameters:
+      - description: Partial query (max 500 characters)
+        in: query
+        name: q
+        type: string
+      - description: Latitude to rank nearby places first
+        in: query
+        name: lat
+        type: number
+      - description: Longitude to rank nearby places first
+        in: query
+        name: lon
+        type: number
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            items:
+              $ref: '#/definitions/geocode.Place'
+            type: array
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Suggest places while typing
+      tags:
+      - geocode
+  /api/tiles/{z}/{x}/{y}:
+    get:
+      parameters:
+      - description: Zoom
+        in: path
+        name: z
+        required: true
+        type: integer
+      - description: Tile column
+        in: path
+        name: x
+        required: true
+        type: integer
+      - description: Tile row, optionally with .png
+        in: path
+        name: "y"
+        required: true
+        type: string
+      produces:
+      - image/png
+      responses:
+        "200":
+          description: OK
+          schema:
+            type: file
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "502":
+          description: Bad Gateway
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+        "503":
+          description: Map tiles are not configured
+          schema:
+            $ref: '#/definitions/server.errorResponse'
+      summary: Base map tile
+      tags:
+      - map
+  /healthz:
+    get:
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            $ref: '#/definitions/server.healthResponse'
+      summary: Health check
+      tags:
+      - health
+swagger: "2.0"
